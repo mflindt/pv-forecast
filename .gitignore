@@ -282,6 +282,7 @@ cover/
 *.pot
 
 # Django stuff:
+logs/
 *.log
 local_settings.py
 db.sqlite3
@@ -396,8 +397,10 @@ poetry.toml
 pyrightconfig.json
 
 # Project data
-data/
-!data/.gitkeep
-!data/**/.gitkeep
+data/interim/
+data/processed/
+!data/raw/
+
+# Models & plots
 models/
 reports/figures/*.png
