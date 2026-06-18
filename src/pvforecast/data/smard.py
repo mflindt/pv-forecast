@@ -64,4 +64,4 @@ def fetch_series(filter_id: str, region: str, resolution: str) -> pd.DataFrame:
         logger.warning(f"{len(failed)} von {len(timestamps)} Chunks fehlten")
 
     logger.info(f"{len(series)} Datenpunkte aus {len(timestamps)} Chunks geladen")
-    return pd.DataFrame(series, columns=["timestamp_ms", "pv_mw"])
+    return pd.DataFrame(series, columns=["timestamp_ms", "pv_mwh"])

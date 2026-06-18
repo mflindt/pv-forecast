@@ -3,20 +3,34 @@ Logging setup for entry-point scripts.
 """
 
 import logging
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 from pvforecast.config import LOG_DIR
 
-# Third-party loggers that would otherwise flood the DEBUG file.
+# Reduce noise from third-party loggers in DEBUG output
 _NOISY_LOGGERS = ("urllib3", "requests")
+
+# Env var set by Makefile to aggregate logs from multi-step runs into one file
+_LOG_FILE_ENV = "PVFORECAST_LOG_FILE"
 
 
 def setup_logging(name: str) -> Path:
-    """Configure root logging"""
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
-    log_file = LOG_DIR / f"{name}_{datetime.now(timezone.utc):%Y-%m-%d_%H%M%S}.log"
+    """Configure root logging with one log file per run.
+
+    Uses PVFORECAST_LOG_FILE if set (append mode), otherwise creates a timestamped file.
+    Each run writes a header for easier log separation.
+    """
+    override = os.environ.get(_LOG_FILE_ENV)
+    if override:
+        log_file = Path(override)
+        mode = "a"
+    else:
+        log_file = LOG_DIR / f"{name}_{datetime.now(timezone.utc):%Y-%m-%d_%H%M%S}.log"
+        mode = "w"
+    log_file.parent.mkdir(parents=True, exist_ok=True)
 
     fmt = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     fmt.converter = time.gmtime
@@ -25,7 +39,7 @@ def setup_logging(name: str) -> Path:
     console.setLevel(logging.INFO)
     console.setFormatter(fmt)
 
-    file = logging.FileHandler(log_file, encoding="utf-8")
+    file = logging.FileHandler(log_file, mode=mode, encoding="utf-8")
     file.setLevel(logging.DEBUG)
     file.setFormatter(fmt)
 
@@ -39,8 +53,8 @@ def setup_logging(name: str) -> Path:
     for noisy in _NOISY_LOGGERS:
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
-    logging.getLogger(__name__).debug(
-        "Run '%s' gestartet (Logdatei: %s)", name, log_file
-    )
+    logger = logging.getLogger(__name__)
+    logger.info("--- %s ---", name.upper())
+    logger.debug("Run '%s' gestartet (Logdatei: %s)", name, log_file)
 
     return log_file
