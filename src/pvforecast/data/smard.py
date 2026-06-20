@@ -40,7 +40,7 @@ def build_series_url(
 
 
 def fetch_series(filter_id: str, region: str, resolution: str) -> pd.DataFrame:
-    """Main function that constructs the URL, iterates through all timestamps, and outputs the resulting list as a dataframe"""
+    """Fetch all weekly chunks for a series and return them as one DataFrame."""
     timestamps = request_data(build_index_url(filter_id, region, resolution))[
         "timestamps"
     ]

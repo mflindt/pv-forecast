@@ -5,7 +5,7 @@ Logging setup for entry-point scripts.
 import logging
 import os
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from pvforecast.config import LOG_DIR
@@ -28,7 +28,7 @@ def setup_logging(name: str) -> Path:
         log_file = Path(override)
         mode = "a"
     else:
-        log_file = LOG_DIR / f"{name}_{datetime.now(timezone.utc):%Y-%m-%d_%H%M%S}.log"
+        log_file = LOG_DIR / f"{name}_{datetime.now(UTC):%Y-%m-%d_%H%M%S}.log"
         mode = "w"
     log_file.parent.mkdir(parents=True, exist_ok=True)
 
