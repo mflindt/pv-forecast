@@ -401,6 +401,5 @@ data/interim/
 data/processed/
 !data/raw/
 
-# Models & plots
+# Models (plots under reports/figures are tracked as Beleg results)
 models/
-reports/figures/*.png
