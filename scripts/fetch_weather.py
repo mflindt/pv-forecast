@@ -12,9 +12,9 @@ logger = logging.getLogger(__name__)
 LATITUDE = 51.2
 LONGITUDE = 10.4
 
-# 2015–2025 coverage; UTC edges (local midnight = 23:00 UTC the day before)
+# 2015-2025 coverage
 START_DATE = "2014-12-30"
-END_DATE = "2025-12-31"
+END_DATE = "2026-01-01"
 
 
 def main():
