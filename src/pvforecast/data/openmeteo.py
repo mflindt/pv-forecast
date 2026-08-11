@@ -14,16 +14,21 @@ logger = logging.getLogger(__name__)
 # Open-Meteo Historical Weather API (ERA5 reanalysis archive)
 BASE_URL = "https://archive-api.open-meteo.com/v1/archive"
 REQUEST_TIMEOUT_S = 60
-
-HOURLY_VARS = [
+RADIATION_VARS = [
     "shortwave_radiation",
     "direct_radiation",
     "diffuse_radiation",
+]
+
+# Instantaneous values: these refer to the timestamp itself and stay untouched.
+INSTANT_VARS = [
     "temperature_2m",
     "cloud_cover",
     "relative_humidity_2m",
     "wind_speed_10m",
 ]
+
+HOURLY_VARS = RADIATION_VARS + INSTANT_VARS
 
 
 def request_data(url: str, params: dict) -> dict:

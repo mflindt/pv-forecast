@@ -10,7 +10,7 @@ from pvforecast.logging_setup import setup_logging
 
 logger = logging.getLogger(__name__)
 
-# 2015–2025 only; 2026 excluded by design.
+# 2015-2025 only; 2026 excluded by design.
 # Year edges defined in UTC (local midnight = 23:00 UTC).
 START = pd.Timestamp("2014-12-31 23:00", tz="UTC")
 END = pd.Timestamp("2025-12-31 23:00", tz="UTC")
