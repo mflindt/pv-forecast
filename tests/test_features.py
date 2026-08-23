@@ -18,8 +18,7 @@ MODEL_INPUT = PROCESSED_DIR / "pv_weather_hourly.parquet"
 
 LAG_COLS = ["cf_lag48h", "cf_lag168h"]
 
-# Features that need no lag: deterministic in the timestamp, or weather of the target
-# hour, which stands in for the NWP forecast available at gate closure.
+# Features that need no lag
 ISSUE_TIME_SAFE = {
     "sun_elevation",
     "sun_azimuth",
@@ -162,13 +161,13 @@ def test_data_start_leaves_the_warmup_behind():
     assert features.DATA_START == pd.Timestamp("2016-01-01", tz="UTC")
 
 
-def test_issue_time_is_the_previous_noon_cet():
+def test_issue_time_is_the_conservative_noon_gate():
     day = pd.date_range("2020-06-15", periods=24, freq="h", tz="UTC")
 
     gate = features.issue_time(day)
 
-    # One gate per target day, 12:00 CET on D-1.
-    assert (gate == pd.Timestamp("2020-06-14 11:00", tz="UTC")).all()
+    # One gate per target day: 12:00 CEST on D-1, the earlier of the two local noons.
+    assert (gate == pd.Timestamp("2020-06-14 10:00", tz="UTC")).all()
 
 
 def test_every_feature_name_clears_the_issue_time():
