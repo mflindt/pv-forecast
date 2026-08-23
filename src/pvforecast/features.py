@@ -8,7 +8,8 @@ capacity factor would not be comparable across years.
 
 The features follow the issue time of the forecast: everything derived from realised
 feed-in is lagged past the day-ahead gate, while the weather columns enter unlagged --
-ERA5 stands in for the NWP forecast that is on the desk at gate closure.
+ERA5 stands in for the NWP forecast that is on the desk at gate closure. That is the
+perfect-prog assumption; it makes every result an upper bound (see docs/arbeitsplan.md).
 """
 
 import logging
@@ -33,9 +34,9 @@ SITE_ALTITUDE_M = 287.0
 # representative for that interval is the one at its middle.
 HOUR_MIDPOINT = pd.Timedelta(minutes=30)
 
-# Day-ahead gate: 12:00 CET on D-1. Under CEST the same local hour is 10:00 UTC;
-# the lags below clear either gate.
-ISSUE_HOUR_UTC = 11
+# Day-ahead gate: 12:00 local time on D-1. That is 11:00 UTC under CET and 10:00 UTC
+# under CEST; the earlier hour holds all year and is the conservative choice.
+ISSUE_HOUR_UTC = 10
 
 # t-24h would leak: from target hour 12:00 UTC on it reaches past the gate.
 LAG_HOURS = (48, 168)
@@ -94,7 +95,7 @@ def to_energy(cf: pd.Series, capacity: pd.Series) -> pd.Series:
 
 
 def issue_time(target: pd.DatetimeIndex | pd.Timestamp) -> pd.DatetimeIndex:
-    """Gate of the day-ahead forecast for the given target hours: 11:00 UTC on D-1."""
+    """Gate of the day-ahead forecast for the given target hours: 10:00 UTC on D-1."""
     lead = pd.Timedelta(days=1) - pd.Timedelta(hours=ISSUE_HOUR_UTC)
     return target.normalize() - lead
 
@@ -156,6 +157,15 @@ def lag_features(series: pd.Series, lags: tuple[int, ...] = LAG_HOURS) -> pd.Dat
         shifted = series.shift(freq=pd.Timedelta(hours=lag))
         out[f"{series.name}_lag{lag}h"] = shifted.reindex(series.index)
     return out
+
+
+def baseline_inputs(X: pd.DataFrame) -> pd.DataFrame:
+    """Lagged clear-sky index the naive references need.
+
+    Kept out of the feature stages on purpose: no learned model sees it, only the
+    clear-sky persistence reference, which is defined in terms of kt(t - 48h).
+    """
+    return lag_features(X["kt"], lags=(min(LAG_HOURS),))
 
 
 def build_features(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series, pd.DataFrame]:

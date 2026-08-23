@@ -12,12 +12,18 @@ dependencies = [
     "pandas>=3.0.3",
     "pvlib>=0.15.1",
     "pyarrow>=24.0.0",
+    "pyyaml>=6.0.3",
     "requests>=2.34.2",
     "scikit-learn>=1.9.0",
     "shap>=0.52.0",
 ]
 
 [dependency-groups]
+# TabPFN needs a GPU to be useful and pulls PyTorch, so it stays out of the default
+# sync; it runs on Colab, not on the Mac (see docs/arbeitsplan.md).
+gpu = [
+    "tabpfn>=8.1.0",
+]
 dev = [
     "ipykernel>=7.3.0",
     "jupyterlab>=4.5.8",

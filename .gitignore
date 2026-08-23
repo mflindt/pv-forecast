@@ -403,3 +403,7 @@ data/processed/
 
 # Models (plots under reports/figures are tracked as Beleg results)
 models/
+
+# Prediction frames are rebuilt by the experiments
+reports/results/**/predictions.parquet
+docs
