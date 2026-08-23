@@ -6,17 +6,15 @@ import numpy as np
 import pandas as pd
 import pvlib
 
-from pvforecast.data.openmeteo import HOURLY_VARS
+from pvforecast.data.openmeteo import HOURLY_VARS, SITES
 
 logger = logging.getLogger(__name__)
 
 # 2015 serves as warm-up for the 365-day window; usable model data starts after it.
 DATA_START = pd.Timestamp("2016-01-01", tz="UTC")
 
-# ERA5 grid cell the radiation comes from: the request point 51.2/10.4 snaps here.
-SITE_LATITUDE = 51.25
-SITE_LONGITUDE = 10.5
-SITE_ALTITUDE_M = 287.0
+# Solar geometry is averaged over the same sites the weather comes from, so that
+# kt = mean(GHI) / mean(cs_ghi) stays a coherent ratio.
 
 # PV and radiation are hourly means labelled at the interval start, so the sun position
 # representative for that interval is the one at its middle.
@@ -87,26 +85,47 @@ def issue_time(target: pd.DatetimeIndex | pd.Timestamp) -> pd.DatetimeIndex:
     return target.normalize() - lead
 
 
-def solar_geometry(index: pd.DatetimeIndex) -> pd.DataFrame:
-    """Solar position and Ineichen clear-sky GHI at the middle of each labelled hour."""
-    mid = index + HOUR_MIDPOINT
-    site = pvlib.location.Location(
-        SITE_LATITUDE, SITE_LONGITUDE, altitude=SITE_ALTITUDE_M
-    )
-    position = pvlib.solarposition.get_solarposition(
-        mid, site.latitude, site.longitude, altitude=site.altitude
-    )
-    clearsky = site.get_clearsky(mid, model="ineichen", solar_position=position)
+def solar_geometry(index: pd.DatetimeIndex, sites: tuple = SITES) -> pd.DataFrame:
+    """Solar position and Ineichen clear-sky GHI, averaged over the weather sites.
 
-    # Below the horizon the cosine turns negative, but no irradiance arrives.
-    cos_zenith = np.cos(np.radians(position["apparent_zenith"].to_numpy())).clip(0.0)
+    Evaluated at the middle of each labelled hour, because PV and radiation are
+    hourly means labelled at the interval start.
+    """
+    mid = index + HOUR_MIDPOINT
+    elevation, cos_zenith, cs_ghi, azimuth_sin, azimuth_cos = [], [], [], [], []
+
+    for _, latitude, longitude, altitude in sites:
+        site = pvlib.location.Location(latitude, longitude, altitude=altitude)
+        position = pvlib.solarposition.get_solarposition(
+            mid, site.latitude, site.longitude, altitude=site.altitude
+        )
+        clearsky = site.get_clearsky(mid, model="ineichen", solar_position=position)
+
+        elevation.append(position["apparent_elevation"].to_numpy())
+        # Below the horizon the cosine turns negative, but no irradiance arrives.
+        cos_zenith.append(
+            np.cos(np.radians(position["apparent_zenith"].to_numpy())).clip(0.0)
+        )
+        cs_ghi.append(clearsky["ghi"].to_numpy())
+
+        radians = np.radians(position["azimuth"].to_numpy())
+        azimuth_sin.append(np.sin(radians))
+        azimuth_cos.append(np.cos(radians))
+
+    # Circular mean: a plain average would break across the 0/360 wrap at night.
+    azimuth = (
+        np.degrees(
+            np.arctan2(np.mean(azimuth_sin, axis=0), np.mean(azimuth_cos, axis=0))
+        )
+        % 360
+    )
 
     return pd.DataFrame(
         {
-            "sun_elevation": position["apparent_elevation"].to_numpy(),
-            "sun_azimuth": position["azimuth"].to_numpy(),
-            "cos_zenith": cos_zenith,
-            "cs_ghi": clearsky["ghi"].to_numpy(),
+            "sun_elevation": np.mean(elevation, axis=0),
+            "sun_azimuth": azimuth,
+            "cos_zenith": np.mean(cos_zenith, axis=0),
+            "cs_ghi": np.mean(cs_ghi, axis=0),
         },
         index=index,
     )

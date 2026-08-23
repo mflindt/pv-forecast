@@ -24,13 +24,17 @@ def _weather(idx: pd.DatetimeIndex) -> pd.DataFrame:
     return w
 
 
-def _weather_full(idx: pd.DatetimeIndex) -> pd.DataFrame:
-    """Weather frame carrying every Open-Meteo variable, values = hour position."""
-    w = pd.DataFrame(
-        {var: range(len(idx)) for var in RADIATION_VARS + INSTANT_VARS}, index=idx
-    )
-    w.index.name = "time"
-    return w
+def _weather_full(idx: pd.DatetimeIndex, sites: tuple = ("a",)) -> pd.DataFrame:
+    """Long-format weather carrying every variable, values = hour position."""
+    frames = []
+    for name in sites:
+        block = pd.DataFrame(
+            {var: range(len(idx)) for var in RADIATION_VARS + INSTANT_VARS}
+        )
+        block.insert(0, "time", idx)
+        block.insert(1, "site", name)
+        frames.append(block)
+    return pd.concat(frames, ignore_index=True)
 
 
 def test_join_pv_weather_inner():
@@ -58,7 +62,7 @@ def test_join_pv_weather_raises_on_missing_weather():
 def test_align_radiation_labels_shifts_only_radiation():
     idx = pd.date_range("2020-01-01 00:00", periods=4, freq="h", tz="UTC")
 
-    out = join.align_radiation_labels(_weather_full(idx))
+    out = join.spatial_mean(join.align_radiation_labels(_weather_full(idx)))
 
     # One hour is consumed at the tail; nothing is filled in.
     assert len(out) == 3
@@ -77,7 +81,7 @@ def test_align_radiation_labels_raises_on_gap():
         ["2020-01-01 00:00", "2020-01-01 01:00", "2020-01-01 03:00"]
     ).tz_localize("UTC")
 
-    with pytest.raises(ValueError, match="Lücken"):
+    with pytest.raises(ValueError, match="Stunden fehlen"):
         join.align_radiation_labels(_weather_full(idx))
 
 
@@ -89,12 +93,12 @@ def test_align_radiation_labels_recovers_the_source_convention():
     driver = driver * rng.uniform(0.3, 1.0, len(idx))
 
     pv = pd.DataFrame({"pv_mwh": driver}, index=idx)
-    weather = _weather_full(idx).astype(float)
+    weather = _weather_full(idx)
     # Open-Meteo would stamp this hour's mean radiation on the following timestamp.
     for var in RADIATION_VARS:
         weather[var] = np.roll(driver, 1) * 800
 
-    aligned = join.align_radiation_labels(weather)
+    aligned = join.spatial_mean(join.align_radiation_labels(weather))
     joined = join.join_pv_weather(pv.iloc[:-1], aligned)
 
     at_alignment = joined["pv_mwh"].corr(joined["shortwave_radiation"])
@@ -126,10 +130,38 @@ def test_radiation_alignment_on_model_input():
 def test_load_weather(tmp_path):
     idx = pd.date_range("2020-01-01 00:00", periods=3, freq="h", tz="UTC")
     csv = tmp_path / "weather.csv"
-    _weather(idx).reset_index().to_csv(csv, index=False)
+    _weather_full(idx, sites=("a", "b")).to_csv(csv, index=False)
 
     out = join.load_weather(csv)
 
-    assert out.index.name == "time"
-    assert str(out.index.tz) == "UTC"
-    assert list(out.columns) == ["shortwave_radiation", "temperature_2m"]
+    assert str(out["time"].dt.tz) == "UTC"
+    assert set(out["site"]) == {"a", "b"}
+
+
+def test_load_weather_raises_without_a_site_column(tmp_path):
+    idx = pd.date_range("2020-01-01 00:00", periods=3, freq="h", tz="UTC")
+    csv = tmp_path / "weather.csv"
+    _weather(idx).reset_index().to_csv(csv, index=False)
+
+    with pytest.raises(ValueError, match="'site'-Spalte"):
+        join.load_weather(csv)
+
+
+def test_spatial_mean_averages_over_the_sites():
+    idx = pd.date_range("2020-01-01 00:00", periods=3, freq="h", tz="UTC")
+    weather = _weather_full(idx, sites=("a", "b"))
+    weather.loc[weather["site"] == "b", "temperature_2m"] += 10
+
+    out = join.spatial_mean(weather)
+
+    assert len(out) == 3
+    assert out["temperature_2m"].tolist() == [5.0, 6.0, 7.0]
+
+
+def test_spatial_mean_raises_when_a_site_is_missing_an_hour():
+    """A partial average would silently reweight the country."""
+    idx = pd.date_range("2020-01-01 00:00", periods=3, freq="h", tz="UTC")
+    weather = _weather_full(idx, sites=("a", "b"))
+
+    with pytest.raises(ValueError, match="ohne alle 2 Standorte"):
+        join.spatial_mean(weather.iloc[:-1])

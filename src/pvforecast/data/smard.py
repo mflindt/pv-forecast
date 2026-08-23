@@ -39,7 +39,9 @@ def build_series_url(
     )
 
 
-def fetch_series(filter_id: str, region: str, resolution: str) -> pd.DataFrame:
+def fetch_series(
+    filter_id: str, region: str, resolution: str, value_column: str = "pv_mwh"
+) -> pd.DataFrame:
     """Fetch all weekly chunks for a series and return them as one DataFrame."""
     timestamps = request_data(build_index_url(filter_id, region, resolution))[
         "timestamps"
@@ -64,4 +66,4 @@ def fetch_series(filter_id: str, region: str, resolution: str) -> pd.DataFrame:
         logger.warning(f"{len(failed)} von {len(timestamps)} Chunks fehlten")
 
     logger.info(f"{len(series)} Datenpunkte aus {len(timestamps)} Chunks geladen")
-    return pd.DataFrame(series, columns=["timestamp_ms", "pv_mwh"])
+    return pd.DataFrame(series, columns=["timestamp_ms", value_column])

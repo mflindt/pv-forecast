@@ -15,7 +15,7 @@ def _index(
 def test_gap_between_train_and_test():
     folds = splits.rolling_origin_days(_index(), gap_hours=48)
 
-    assert len(folds) == 8
+    assert len(folds) == 12
     for train, test in folds:
         assert train.max() + pd.Timedelta(hours=48) <= test.min()
 
@@ -29,6 +29,16 @@ def test_test_folds_are_complete_utc_days():
         assert test.max().time() == pd.Timestamp("23:00").time()
         # Every day carries all 24 hours.
         assert (test.normalize().value_counts() == 24).all()
+
+
+def test_default_folds_cover_three_seasonal_cycles():
+    """Two years of test data would leave the fold spread resting on two winters."""
+    folds = splits.rolling_origin_days(_index())
+    covered = pd.DatetimeIndex([]).append([test for _, test in folds])
+
+    assert covered.max() - covered.min() > pd.Timedelta(days=1000)
+    # The smallest training window still holds several years.
+    assert len(folds[0][0]) / 24 / 365 > 5
 
 
 def test_holdout_year_is_never_touched():
