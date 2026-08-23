@@ -279,25 +279,42 @@ def test_build_features_raises_when_the_series_is_too_short():
 
 def test_solar_geometry_is_evaluated_at_the_hour_middle():
     idx = pd.date_range("2020-06-21 00:00", periods=24, freq="h", tz="UTC")
-    site = pvlib.location.Location(
-        features.SITE_LATITUDE,
-        features.SITE_LONGITUDE,
-        altitude=features.SITE_ALTITUDE_M,
-    )
+    one_site = (features.SITES[0],)
+    _, latitude, longitude, altitude = features.SITES[0]
 
-    out = features.solar_geometry(idx)
+    out = features.solar_geometry(idx, sites=one_site)
 
     at_label = pvlib.solarposition.get_solarposition(
-        idx, site.latitude, site.longitude, altitude=site.altitude
+        idx, latitude, longitude, altitude=altitude
     )
     at_middle = pvlib.solarposition.get_solarposition(
-        idx + features.HOUR_MIDPOINT,
-        site.latitude,
-        site.longitude,
-        altitude=site.altitude,
+        idx + features.HOUR_MIDPOINT, latitude, longitude, altitude=altitude
     )
     assert np.allclose(out["sun_elevation"], at_middle["apparent_elevation"])
     assert not np.allclose(out["sun_elevation"], at_label["apparent_elevation"])
+
+
+def test_solar_geometry_averages_over_the_sites():
+    """The national geometry must sit between its northernmost and southernmost site."""
+    idx = pd.date_range("2020-06-21 10:00", periods=4, freq="h", tz="UTC")
+    north = features.solar_geometry(idx, sites=(features.SITES[0],))
+    south = features.solar_geometry(idx, sites=(features.SITES[3],))
+
+    out = features.solar_geometry(idx)
+
+    assert (north["sun_elevation"] < out["sun_elevation"]).all()
+    assert (out["sun_elevation"] < south["sun_elevation"]).all()
+
+
+def test_solar_geometry_azimuth_survives_the_wrap():
+    """A plain mean of azimuths would land near 180 degrees around midnight."""
+    idx = pd.date_range("2020-06-21 00:00", periods=24, freq="h", tz="UTC")
+
+    out = features.solar_geometry(idx)
+
+    assert out["sun_azimuth"].between(0, 360).all()
+    # Around solar midnight the sun sits due north, not due south.
+    assert out.loc[idx[0], "sun_azimuth"] < 45 or out.loc[idx[0], "sun_azimuth"] > 315
 
 
 def test_solar_geometry_covers_the_night():

@@ -1,4 +1,8 @@
-"""Rolling-origin backtesting splits on whole UTC days."""
+"""Rolling-origin backtesting splits on whole UTC days.
+
+Twelve folds of 90 days cover three full seasonal cycles and still leave six years
+in the smallest training window.
+"""
 
 import logging
 import math
@@ -34,7 +38,7 @@ def _hours_of(index: pd.DatetimeIndex, days: pd.DatetimeIndex) -> pd.DatetimeInd
 
 def rolling_origin_days(
     index: pd.DatetimeIndex,
-    n_folds: int = 8,
+    n_folds: int = 12,
     test_days: int = 90,
     gap_hours: int = 48,
     mode: str = "expanding",

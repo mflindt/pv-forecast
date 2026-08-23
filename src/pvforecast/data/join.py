@@ -1,7 +1,9 @@
 """
 Join of the clean hourly PV series with the Open-Meteo weather series.
 
-Aligns both series on their UTC hourly timestamp into one model-ready table.
+The weather arrives per site and is reduced to one national mean before the join.
+Equal weights: a capacity weighting would need regional capacity shares we do not
+have, and the mean already carries the spatial signal (see docs/arbeitsplan.md).
 """
 
 import logging
@@ -9,36 +11,66 @@ from pathlib import Path
 
 import pandas as pd
 
-from pvforecast.data.openmeteo import RADIATION_VARS
+from pvforecast.data.openmeteo import HOURLY_VARS, RADIATION_VARS
 
 logger = logging.getLogger(__name__)
 
 
 def load_weather(path: Path) -> pd.DataFrame:
-    """Read the raw weather CSV and build a UTC DatetimeIndex named 'time'."""
+    """Read the raw long-format weather CSV and build a UTC 'time' column."""
     df = pd.read_csv(path)
     df["time"] = pd.to_datetime(df["time"], utc=True)
-    df = df.set_index("time")
-    logger.info(f"{len(df)} Wetterstunden geladen: {path.name}")
+
+    if "site" not in df.columns:
+        raise ValueError("Wetterdatei ohne 'site'-Spalte")
+
+    sites = df["site"].nunique()
+    logger.info(f"{len(df)} Wetterzeilen, {sites} Standorte geladen: {path.name}")
     return df
 
 
 def align_radiation_labels(weather: pd.DataFrame) -> pd.DataFrame:
-    """Shift the radiation columns one hour back onto SMARD's label convention."""
-    full = pd.date_range(weather.index.min(), weather.index.max(), freq="h")
-    missing = full.difference(weather.index)
-    if not missing.empty:
-        raise ValueError(f"Lücken im Wetter-Stundenraster: {len(missing)} Stunden")
+    """Shift the radiation columns one hour back onto SMARD's label convention.
 
-    aligned = weather.copy()
-    aligned[RADIATION_VARS] = weather[RADIATION_VARS].shift(-1)
-    aligned = aligned.iloc[:-1]
+    Open-Meteo labels a radiation mean at the end of its interval, SMARD at the
+    start. Applied per site, because the shift must not cross a site boundary.
+    """
+    aligned = []
+    for name, block in weather.groupby("site", sort=False):
+        block = block.sort_values("time")
+        full = pd.date_range(block["time"].min(), block["time"].max(), freq="h")
+        missing = full.difference(pd.DatetimeIndex(block["time"]))
+        if not missing.empty:
+            raise ValueError(f"Standort {name}: {len(missing)} Stunden fehlen")
 
+        shifted = block.copy()
+        shifted[RADIATION_VARS] = block[RADIATION_VARS].shift(-1)
+        aligned.append(shifted.iloc[:-1])
+
+    out = pd.concat(aligned, ignore_index=True)
     logger.info(
-        f"Strahlung um 1 h nach vorn ausgerichtet ({', '.join(RADIATION_VARS)}); "
-        f"letzte Wetterstunde entfällt -> {len(aligned)} Stunden"
+        f"Strahlung je Standort um 1 h nach vorn ausgerichtet "
+        f"({', '.join(RADIATION_VARS)}); letzte Stunde entfällt -> {len(out)} Zeilen"
     )
-    return aligned
+    return out
+
+
+def spatial_mean(weather: pd.DataFrame) -> pd.DataFrame:
+    """Reduce the per-site weather to one national hourly mean."""
+    sites = weather["site"].nunique()
+    counts = weather.groupby("time").size()
+    incomplete = counts[counts != sites]
+    if not incomplete.empty:
+        raise ValueError(
+            f"{len(incomplete)} Stunden ohne alle {sites} Standorte, "
+            f"z. B. {incomplete.index[0]:%Y-%m-%d %H:%M}"
+        )
+
+    out = weather.groupby("time")[HOURLY_VARS].mean()
+    out.index.name = "time"
+
+    logger.info(f"{sites} Standorte zu {len(out)} Stundenmitteln gemittelt")
+    return out
 
 
 def join_pv_weather(pv: pd.DataFrame, weather: pd.DataFrame) -> pd.DataFrame:
