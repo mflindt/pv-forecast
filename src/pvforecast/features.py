@@ -1,16 +1,4 @@
-"""
-Target variable and feature matrix for the day-ahead PV forecast.
-
-The feed-in series is normalised by an empirical, rolling capacity estimate rather
-than by the installed nameplate power: feed-in per installed MW drifts downward over
-the project period (see notebooks/05_kapazitaet_drift.ipynb), so a nameplate-based
-capacity factor would not be comparable across years.
-
-The features follow the issue time of the forecast: everything derived from realised
-feed-in is lagged past the day-ahead gate, while the weather columns enter unlagged --
-ERA5 stands in for the NWP forecast that is on the desk at gate closure. That is the
-perfect-prog assumption; it makes every result an upper bound (see docs/arbeitsplan.md).
-"""
+"""Target variable and feature matrix for the day-ahead PV forecast."""
 
 import logging
 
@@ -34,8 +22,7 @@ SITE_ALTITUDE_M = 287.0
 # representative for that interval is the one at its middle.
 HOUR_MIDPOINT = pd.Timedelta(minutes=30)
 
-# Day-ahead gate: 12:00 local time on D-1. That is 11:00 UTC under CET and 10:00 UTC
-# under CEST; the earlier hour holds all year and is the conservative choice.
+# Day-ahead gate: 12:00 local time on D-1.
 ISSUE_HOUR_UTC = 10
 
 # t-24h would leak: from target hour 12:00 UTC on it reaches past the gate.
@@ -160,11 +147,7 @@ def lag_features(series: pd.Series, lags: tuple[int, ...] = LAG_HOURS) -> pd.Dat
 
 
 def baseline_inputs(X: pd.DataFrame) -> pd.DataFrame:
-    """Lagged clear-sky index the naive references need.
-
-    Kept out of the feature stages on purpose: no learned model sees it, only the
-    clear-sky persistence reference, which is defined in terms of kt(t - 48h).
-    """
+    """Lagged clear-sky index the naive references need."""
     return lag_features(X["kt"], lags=(min(LAG_HOURS),))
 
 

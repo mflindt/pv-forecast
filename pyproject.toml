@@ -19,8 +19,6 @@ dependencies = [
 ]
 
 [dependency-groups]
-# TabPFN needs a GPU to be useful and pulls PyTorch, so it stays out of the default
-# sync; it runs on Colab, not on the Mac (see docs/arbeitsplan.md).
 gpu = [
     "tabpfn>=8.1.0",
 ]

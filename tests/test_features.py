@@ -18,8 +18,7 @@ MODEL_INPUT = PROCESSED_DIR / "pv_weather_hourly.parquet"
 
 LAG_COLS = ["cf_lag48h", "cf_lag168h"]
 
-# Features that need no lag: deterministic in the timestamp, or weather of the target
-# hour, which stands in for the NWP forecast available at gate closure.
+# Features that need no lag
 ISSUE_TIME_SAFE = {
     "sun_elevation",
     "sun_azimuth",
