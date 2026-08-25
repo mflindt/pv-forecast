@@ -1,9 +1,4 @@
-"""
-Forecast metrics for the day-ahead PV evaluation.
-
-Headline numbers are daylight only and normalised per timestamp; both choices are
-argued in docs/arbeitsplan.md.
-"""
+"""Day-ahead PV forecast metrics."""
 
 import logging
 import math
@@ -16,13 +11,12 @@ logger = logging.getLogger(__name__)
 # Astronomical, so the mask leaks nothing into the metric.
 DAYLIGHT_ELEVATION_DEG = 5.0
 
-# Both divisors are per hour, so MWh per hour and MW are the same number.
+# MWh per hour equals MW.
 NORMALISERS = {"cap_roll": "cap_roll_mwh", "cap_ac": "cap_ac_mw"}
 
-# Long-format contract every experiment writes and every table reads.
+# Shared long-format output for all experiments and tables
 PREDICTION_COLUMNS = (
     "time",
-    "split",
     "fold",
     "model",
     "featureset",
@@ -36,17 +30,16 @@ PREDICTION_COLUMNS = (
     "kt",
 )
 
-# Cloud regimes for the stratified error tables.
+SCORES = ["nmae", "nrmse", "nmbe", "mae", "rmse", "mbe"]
+
+# Cloud and yield regimes for error tables.
 KT_EDGES = (0.0, 0.35, 0.75, np.inf)
 KT_LABELS = ("bedeckt", "teilbewölkt", "klar")
-
-# Yield regimes: the aggregate nMBE averages a positive bias at low feed-in against a
-# strong negative one at high feed-in, so it has to be reported conditionally too.
 CF_QUANTILE_LABELS = ("Q1", "Q2", "Q3", "Q4", "Q5")
 
 STRATA = ("month", "kt_bin", "hour", "cf_quantile")
 
-# Below this a HAC variance on daily differentials is not worth reporting.
+# Below this, HAC variance is not worth reporting.
 MIN_TEST_DAYS = 30
 
 
@@ -63,7 +56,6 @@ def check_predictions(df: pd.DataFrame) -> pd.DataFrame:
     for name in NORMALISERS.values():
         if (df[name] <= 0).any():
             raise ValueError(f"Normierung {name} enthält Werte <= 0")
-
     return df
 
 
@@ -77,9 +69,7 @@ def kt_bins(kt: pd.Series) -> pd.Series:
     return pd.cut(kt, bins=list(KT_EDGES), labels=list(KT_LABELS), right=False)
 
 
-def point_metrics(
-    y_true: pd.Series, y_pred: pd.Series, capacity: pd.Series
-) -> dict[str, float | int]:
+def point_metrics(y_true, y_pred, capacity) -> dict[str, float | int]:
     """Absolute and capacity-normalised error metrics for one forecast series."""
     if not (len(y_true) == len(y_pred) == len(capacity)):
         raise ValueError("y_true, y_pred und capacity müssen gleich lang sein")
@@ -102,7 +92,7 @@ def point_metrics(
 
 def evaluate(
     predictions: pd.DataFrame,
-    groupby: tuple[str, ...] = ("model", "featureset", "split", "fold"),
+    groupby: tuple[str, ...] = ("model", "featureset", "fold"),
     normaliser: str = "cap_roll",
     daylight_only: bool = True,
 ) -> pd.DataFrame:
@@ -133,35 +123,18 @@ def evaluate(
     # Columns, not attrs: a CSV has to say what it normalised by.
     out["normaliser"] = normaliser
     out["daylight_only"] = daylight_only
-
-    logger.info(
-        f"{len(out)} Metrikzeilen ({', '.join(groupby)}), Normierung {normaliser}, "
-        f"{'nur Tagstunden' if daylight_only else 'alle 24 Stunden'}"
-    )
     return out
 
 
 def aggregate_folds(
     metrics: pd.DataFrame, groupby: tuple[str, ...] = ("model", "featureset")
 ) -> pd.DataFrame:
-    """Mean and spread over the folds, plus the separate spread over the repeats.
-
-    The repeats of a stochastic model are collapsed to one value per fold first.
-    Taking the spread over the raw rows instead would mix two sources of variation,
-    deflate the estimate and claim three times the degrees of freedom it has.
-
-    `<score>_std` is the spread over the folds. The folds are seasonally confounded
-    by construction, so it is a seasonal range, not a standard error of the mean.
-    `<score>_sd_seed` is the seed spread within a fold, averaged over folds -- that
-    is the model uncertainty table T4 asks for.
-    """
+    """Mean and spread across folds and seeds."""
     if "fold" not in metrics.columns:
         raise ValueError("aggregate_folds braucht eine 'fold'-Spalte")
 
-    scores = ["nmae", "nrmse", "nmbe", "mae", "rmse", "mbe"]
     keys = list(groupby)
-
-    by_fold = metrics.groupby(keys + ["fold"], observed=True)[scores]
+    by_fold = metrics.groupby(keys + ["fold"], observed=True)[SCORES]
     grouped = by_fold.mean().groupby(keys, observed=True)
 
     agg = grouped.agg(["mean", "std"])
@@ -170,9 +143,9 @@ def aggregate_folds(
 
     if "seed" in metrics.columns:
         # NaN where a fold ran once -- a deterministic fit has no seed spread.
-        seed_sd = by_fold.std().groupby(keys, observed=True).mean()
-        agg = agg.join(seed_sd.add_suffix("_sd_seed"))
-
+        agg = agg.join(
+            by_fold.std().groupby(keys, observed=True).mean().add_suffix("_sd_seed")
+        )
     return agg.reset_index()
 
 
@@ -180,13 +153,9 @@ def add_skill(
     metrics: pd.DataFrame,
     reference: str,
     score: str = "nmae",
-    by: tuple[str, ...] = ("split", "fold"),
+    by: tuple[str, ...] = ("fold",),
 ) -> pd.DataFrame:
-    """Skill score SS = 1 - score_model / score_reference.
-
-    Matched per fold when the metrics carry fold columns, against the single
-    reference row when they do not. The pooled value is the headline number.
-    """
+    """Skill score relative to the reference model."""
     if reference not in set(metrics["model"]):
         raise ValueError(f"Referenzmodell {reference!r} fehlt in den Metriken")
 
@@ -213,28 +182,26 @@ def add_skill(
 
 def stratify(
     predictions: pd.DataFrame,
-    by: str = "month",
+    by: str,
     normaliser: str = "cap_roll",
     daylight_only: bool = True,
 ) -> pd.DataFrame:
-    """Metrics per model and stratum: month, cloud regime or hour of day."""
+    """Metrics per model and stratum: month, cloud regime, hour or yield quintile."""
     check_predictions(predictions)
     df = predictions.copy()
+    time = pd.to_datetime(df["time"], utc=True)
 
     if by == "month":
-        df["stratum"] = pd.to_datetime(df["time"], utc=True).dt.month
+        df["stratum"] = time.dt.month
+    elif by == "hour":
+        df["stratum"] = time.dt.hour
     elif by == "kt_bin":
         df["stratum"] = kt_bins(df["kt"])
-    elif by == "hour":
-        df["stratum"] = pd.to_datetime(df["time"], utc=True).dt.hour
     elif by == "cf_quantile":
-        # Binned on the evaluated rows only: over all 24 hours the lower quintiles
-        # would collapse onto the night zeros. Rows outside carry a NaN stratum and
-        # drop out of the groupby.
+        # Binned on evaluated rows only; night zeros would distort the bins.
         rows = daylight_mask(df["sun_elevation"]) if daylight_only else slice(None)
         cf = df.loc[rows, "y_true_mwh"] / df.loc[rows, NORMALISERS[normaliser]]
-        # Ranks rather than qcut: the edges stay distinct even when the target has
-        # long ties, where qcut would raise on duplicate bin edges.
+        # Ranks rather than qcut: the edges stay distinct even under long ties.
         edges = np.linspace(0.0, 1.0, len(CF_QUANTILE_LABELS) + 1)
         df["stratum"] = pd.cut(
             cf.rank(pct=True),
@@ -253,6 +220,23 @@ def stratify(
     )
 
 
+def stratify_all(
+    predictions: pd.DataFrame, normaliser: str = "cap_roll", daylight_only: bool = True
+) -> pd.DataFrame:
+    """All four stratifications in one long frame with a `stratum_type` column."""
+    frames = []
+    for key in STRATA:
+        frame = stratify(predictions, key, normaliser, daylight_only)
+        frame.insert(0, "stratum_type", key)
+        # Mixed types across the four keys; one string column keeps the CSV honest.
+        frame["stratum"] = frame["stratum"].astype(str)
+        frames.append(frame)
+
+    out = pd.concat(frames, ignore_index=True)
+    logger.info(f"{len(out)} Metrikzeilen über {len(STRATA)} Schichtungen")
+    return out
+
+
 def _hac_variance(x: np.ndarray, lag: int) -> float:
     """Newey-West long-run variance with a Bartlett kernel."""
     variance = float(np.var(x, ddof=0))
@@ -263,18 +247,28 @@ def _hac_variance(x: np.ndarray, lag: int) -> float:
     return max(variance, 0.0)
 
 
-def _normal_two_sided(t: float) -> float:
-    """Two-sided p-value of a standard normal statistic."""
-    return math.erfc(abs(t) / math.sqrt(2.0))
+def _holm(p_values: np.ndarray) -> np.ndarray:
+    """Holm step-down correction; monotone and never above 1."""
+    order = np.argsort(p_values)
+    m = len(p_values)
+    adjusted = np.empty(m)
+    running = 0.0
+    for rank, index in enumerate(order):
+        running = max(running, (m - rank) * p_values[index])
+        adjusted[index] = min(running, 1.0)
+    return adjusted
 
 
-def _daily_loss(
-    predictions: pd.DataFrame, normaliser: str, daylight_only: bool
+def daily_loss(
+    predictions: pd.DataFrame, normaliser: str = "cap_roll", daylight_only: bool = True
 ) -> pd.DataFrame:
-    """Mean normalised absolute loss per model and UTC day, averaged over repeats."""
+    """Daily mean normalised loss per model."""
+    check_predictions(predictions)
+
     df = predictions
     if daylight_only:
         df = df[daylight_mask(df["sun_elevation"])]
+
     loss = (df["y_pred_mwh"] - df["y_true_mwh"]).abs() / df[NORMALISERS[normaliser]]
     day = pd.to_datetime(df["time"], utc=True).dt.floor("D")
     return (
@@ -285,33 +279,18 @@ def _daily_loss(
     )
 
 
-def loss_differential_test(
+def significance_test(
     predictions: pd.DataFrame,
     reference: str,
     normaliser: str = "cap_roll",
     daylight_only: bool = True,
 ) -> pd.DataFrame:
-    """Giacomini-White test of every model against one reference forecast.
-
-    The loss differential is aggregated to whole UTC days first: hourly errors are
-    strongly autocorrelated within a day, and a test on hourly rows would treat
-    ~11 correlated hours as independent evidence. The residual day-to-day dependence
-    is absorbed by a Newey-West HAC variance with the usual automatic bandwidth.
-
-    Giacomini & White (2006), Econometrica 74:1545 rather than Diebold-Mariano:
-    the models are re-estimated on every fold, which is exactly the rolling-scheme
-    case DM does not cover. The statistic is the same, the justification is not.
-
-    Holm-corrected across the comparisons, so the family-wise error rate holds.
-    """
-    check_predictions(predictions)
-    daily = _daily_loss(predictions, normaliser, daylight_only)
+    """Giacomini-White test of each model against the reference forecast."""
+    daily = daily_loss(predictions, normaliser, daylight_only)
 
     columns = [key for key in daily.columns if key[0] == reference]
     if len(columns) != 1:
-        raise ValueError(
-            f"Referenz {reference!r} ist nicht eindeutig ({len(columns)} Spalten)"
-        )
+        raise ValueError(f"Referenz {reference!r} ist nicht eindeutig ({len(columns)})")
     base = daily[columns[0]]
 
     rows = []
@@ -343,14 +322,12 @@ def loss_differential_test(
                 "hac_se": standard_error,
                 "hac_lag": lag,
                 "t": t,
-                "p_value": _normal_two_sided(t),
+                "p_value": math.erfc(abs(t) / math.sqrt(2.0)),
             }
         )
 
     out = pd.DataFrame(rows).sort_values("mean_loss_diff").reset_index(drop=True)
     out["p_holm"] = _holm(out["p_value"].to_numpy())
-    out["normaliser"] = normaliser
-    out["daylight_only"] = daylight_only
 
     logger.info(
         f"Giacomini-White gegen {reference}: {len(out)} Vergleiche über "
@@ -360,13 +337,106 @@ def loss_differential_test(
     return out
 
 
-def _holm(p_values: np.ndarray) -> np.ndarray:
-    """Holm step-down correction; monotone and never above 1."""
-    order = np.argsort(p_values)
-    m = len(p_values)
-    adjusted = np.empty(m)
-    running = 0.0
-    for rank, index in enumerate(order):
-        running = max(running, (m - rank) * p_values[index])
-        adjusted[index] = min(running, 1.0)
-    return adjusted
+def score(cfg: dict, predictions: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    """Metrics per fold, pooled, per stratum and the significance test."""
+    settings = {
+        "normaliser": cfg["evaluation"]["normaliser"],
+        "daylight_only": cfg["evaluation"]["daylight_only"],
+    }
+    reference = cfg["evaluation"]["skill_reference"]
+
+    per_fold = evaluate(
+        predictions,
+        groupby=("model", "featureset", "information_set", "fold", "seed"),
+        **settings,
+    )
+    pooled = evaluate(
+        predictions, groupby=("model", "featureset", "information_set"), **settings
+    )
+
+    if reference in set(predictions["model"]):
+        per_fold = add_skill(per_fold, reference)
+        pooled = add_skill(pooled, reference)
+    else:
+        logger.warning(f"Skill-Referenz {reference!r} fehlt im Lauf, kein Skill Score")
+
+    spread = aggregate_folds(per_fold, groupby=("model", "featureset"))
+    pooled = pooled.merge(spread, on=["model", "featureset"], how="left")
+
+    results = {
+        "metrics_fold": per_fold,
+        "metrics_agg": pooled.sort_values("nmae").reset_index(drop=True),
+        "strata": stratify_all(predictions, **settings),
+    }
+    if cfg["evaluation"].get("significance") and reference in set(predictions["model"]):
+        results["tests"] = significance_test(predictions, reference, **settings)
+    return results
+
+
+def _markdown_table(df: pd.DataFrame, decimals: int = 4) -> str:
+    """Render a frame as a Markdown table without pulling in a formatting library."""
+
+    def cell(value) -> str:
+        if isinstance(value, float):
+            return "" if pd.isna(value) else f"{value:.{decimals}f}"
+        return str(value)
+
+    header = list(df.columns)
+    rows = [[cell(value) for value in row] for row in df.itertuples(index=False)]
+    widths = [
+        max(len(str(header[i])), *(len(row[i]) for row in rows))
+        if rows
+        else len(header[i])
+        for i in range(len(header))
+    ]
+
+    def line(values: list[str]) -> str:
+        return (
+            "| "
+            + " | ".join(v.ljust(w) for v, w in zip(values, widths, strict=True))
+            + " |"
+        )
+
+    return "\n".join(
+        [
+            line([str(h) for h in header]),
+            "|" + "|".join("-" * (w + 2) for w in widths) + "|",
+        ]
+        + [line(row) for row in rows]
+    )
+
+
+def summary_table(cfg: dict, pooled: pd.DataFrame, run_id: str = "") -> str:
+    """The headline table of the run as Markdown, ready to paste into the thesis."""
+    columns = {
+        "model": "Modell",
+        "featureset": "Features",
+        "information_set": "Informationsstand",
+        "nmae": "nMAE",
+        "nmae_std": "sd Fold",
+        "nmae_sd_seed": "sd Seed",
+        "nrmse": "nRMSE",
+        "nmbe": "nMBE",
+        "mae": "MAE (MWh)",
+        "skill": "Skill",
+    }
+    present = {key: label for key, label in columns.items() if key in pooled.columns}
+    table = pooled.sort_values("nmae")[list(present)].rename(columns=present)
+
+    evaluation = cfg["evaluation"]
+    hours = "Tagstunden" if evaluation["daylight_only"] else "alle 24 Stunden"
+    folds = int(pooled["n_folds"].max())
+
+    return "\n".join(
+        [
+            "# Ergebnisse" + (f" {run_id}" if run_id else ""),
+            "",
+            f"{folds} Folds, ausgewertet über {hours}, "
+            f"Normierung `{evaluation['normaliser']}`.",
+            f"Skill Score gegen `{evaluation['skill_reference']}`.",
+            "`perfect_prog` (ERA5) und `operational` (ÜNB) sind nicht vergleichbar.",
+            "",
+            _markdown_table(table),
+            "",
+        ]
+    )

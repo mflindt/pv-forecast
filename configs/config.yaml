@@ -1,0 +1,35 @@
+# Run settings
+
+# Seed for the search and the deterministic models.
+seed: 42
+seeds: [42, 43, 44]
+
+# Naive references
+references:
+  - R0_climatology
+  - R1_persistence
+  - R2_clearsky_persistence
+  - R3_combined
+
+include_tso: true
+models: [ridge, lightgbm]
+featuresets: [S3]
+
+splits:
+  n_folds: 12
+  test_days: 90
+  gap_hours: 48
+  mode: expanding
+
+
+tuning:
+  validation_days: 90
+  gap_hours: 48
+
+evaluation:
+  normaliser: cap_roll
+  daylight_only: true
+  skill_reference: R3_combined
+  significance: true
+
+output_dir: reports
