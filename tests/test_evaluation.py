@@ -19,6 +19,7 @@ def _predictions(n_hours: int = 96, error: float = 100.0) -> pd.DataFrame:
             "fold": 1,
             "model": "M",
             "featureset": "S3",
+            "information_set": "perfect_prog",
             "seed": 0,
             "y_true_mwh": 1000.0,
             "y_pred_mwh": 1000.0 + error,
@@ -211,3 +212,120 @@ def test_stratify_by_hour_keeps_only_daylight():
 def test_stratify_rejects_an_unknown_key():
     with pytest.raises(ValueError, match="Unbekannte Schichtung"):
         evaluation.stratify(_predictions(), by="weekday")
+
+
+def test_aggregate_folds_collapses_repeats_before_taking_the_spread():
+    """Three seeds per fold must not be counted as three independent observations."""
+    per_fold = pd.DataFrame(
+        {
+            "model": "M",
+            "featureset": "S3",
+            "fold": [1, 1, 1, 2, 2, 2],
+            "seed": [42, 43, 44, 42, 43, 44],
+            "nmae": [0.10, 0.10, 0.10, 0.20, 0.20, 0.20],
+            "nrmse": 0.0,
+            "nmbe": 0.0,
+            "mae": 0.0,
+            "rmse": 0.0,
+            "mbe": 0.0,
+        }
+    )
+
+    agg = evaluation.aggregate_folds(per_fold)
+
+    # sd over the two fold means, not over the six rows.
+    assert agg["nmae_mean"].iloc[0] == pytest.approx(0.15)
+    assert agg["nmae_std"].iloc[0] == pytest.approx(np.std([0.1, 0.2], ddof=1))
+    assert agg["n_folds"].iloc[0] == 2
+    # Identical repeats mean zero seed spread -- reported separately, not mixed in.
+    assert agg["nmae_sd_seed"].iloc[0] == pytest.approx(0.0)
+
+
+def test_aggregate_folds_separates_seed_spread_from_fold_spread():
+    per_fold = pd.DataFrame(
+        {
+            "model": "M",
+            "featureset": "S3",
+            "fold": [1, 1, 2, 2],
+            "seed": [42, 43, 42, 43],
+            "nmae": [0.09, 0.11, 0.19, 0.21],
+            "nrmse": 0.0,
+            "nmbe": 0.0,
+            "mae": 0.0,
+            "rmse": 0.0,
+            "mbe": 0.0,
+        }
+    )
+
+    agg = evaluation.aggregate_folds(per_fold)
+
+    assert agg["nmae_std"].iloc[0] == pytest.approx(np.std([0.1, 0.2], ddof=1))
+    assert agg["nmae_sd_seed"].iloc[0] == pytest.approx(np.std([0.09, 0.11], ddof=1))
+
+
+def _two_models(days: int = 120, better: float = 50.0, worse: float = 150.0):
+    """Two forecasts of the same truth, one clearly better than the other."""
+    frames = []
+    for name, error in (("good", better), ("bad", worse)):
+        frame = _predictions(n_hours=days * 24, error=error).assign(model=name)
+        frames.append(frame)
+    return pd.concat(frames, ignore_index=True)
+
+
+def test_loss_differential_test_finds_a_real_difference():
+    tests = evaluation.loss_differential_test(_two_models(), reference="bad")
+
+    row = tests.iloc[0]
+    assert row["model"] == "good"
+    assert row["mean_loss_diff"] < 0
+    assert row["p_holm"] < 0.01
+    assert row["n_days"] == 120
+
+
+def test_loss_differential_test_aggregates_to_days_not_hours():
+    """A test on hourly rows would claim ~11x the evidence it has."""
+    tests = evaluation.loss_differential_test(_two_models(days=90), reference="bad")
+
+    assert tests["n_days"].iloc[0] == 90
+
+
+def test_loss_differential_test_stays_silent_without_a_difference():
+    same = pd.concat(
+        [
+            _predictions(n_hours=120 * 24, error=100.0).assign(model=name)
+            for name in ("a", "b")
+        ],
+        ignore_index=True,
+    )
+
+    tests = evaluation.loss_differential_test(same, reference="a")
+
+    assert tests["mean_loss_diff"].iloc[0] == pytest.approx(0.0)
+    assert tests["p_holm"].iloc[0] == pytest.approx(1.0)
+
+
+def test_loss_differential_test_rejects_too_few_days():
+    with pytest.raises(ValueError, match="reichen nicht"):
+        evaluation.loss_differential_test(_two_models(days=10), reference="bad")
+
+
+def test_holm_is_monotone_and_bounded():
+    raw = np.array([0.001, 0.02, 0.04, 0.5])
+
+    adjusted = evaluation._holm(raw)
+
+    assert (adjusted >= raw).all()
+    assert (adjusted <= 1.0).all()
+    assert (np.diff(adjusted[np.argsort(raw)]) >= 0).all()
+
+
+def test_stratify_by_cf_quantile_splits_the_daylight_rows():
+    """The aggregate nMBE hides a sign flip between low and high feed-in."""
+    frame = _predictions(n_hours=480)
+    # A flat truth has no quantiles; the yield follows the sun.
+    frame["y_true_mwh"] = 1000.0 + 50.0 * frame["sun_elevation"]
+
+    strata = evaluation.stratify(frame, by="cf_quantile")
+
+    assert set(strata["stratum"]) == set(evaluation.CF_QUANTILE_LABELS)
+    assert strata["n"].sum() == (frame["sun_elevation"] > 5).sum()

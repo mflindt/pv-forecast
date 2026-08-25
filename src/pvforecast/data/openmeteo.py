@@ -45,6 +45,12 @@ INSTANT_VARS = [
 
 HOURLY_VARS = RADIATION_VARS + INSTANT_VARS
 
+# The archive satisfies GHI = direct + diffuse to machine precision, so the three
+# radiation columns are exactly linearly dependent. All three are fetched and stored,
+# but only two of them may enter a design matrix.
+REDUNDANT_VAR = "direct_radiation"
+MODEL_VARS = [name for name in HOURLY_VARS if name != REDUNDANT_VAR]
+
 
 def request_data(url: str, params: dict) -> dict | list:
     """Request data from the Open-Meteo archive and return parsed JSON."""

@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import pvlib
 
-from pvforecast.data.openmeteo import HOURLY_VARS, SITES
+from pvforecast.data.openmeteo import HOURLY_VARS, MODEL_VARS, SITES
 
 logger = logging.getLogger(__name__)
 
@@ -176,6 +176,9 @@ def build_features(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series, pd.DataFr
     X holds only what is known at the issue time: deterministic solar geometry, the
     weather of the target hour and feed-in lagged past the gate. Rows are kept, so the
     lag warm-up at the start of the series stays visible as NaN instead of vanishing.
+
+    The redundant radiation column is dropped here, not in the feature stages, so no
+    design matrix built from X can be rank deficient. See docs/arbeitsplan.md 7.2.
     """
     missing = [col for col in ("pv_mwh", *HOURLY_VARS) if col not in df.columns]
     if missing:
@@ -196,7 +199,7 @@ def build_features(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series, pd.DataFr
             clear_sky_index(df["shortwave_radiation"], solar["cs_ghi"]),
             diffuse_fraction(df["shortwave_radiation"], df["diffuse_radiation"]),
             cyclic_day_of_year(df.index),
-            df[HOURLY_VARS],
+            df[MODEL_VARS],
             lag_features(cf),
         ],
         axis=1,
