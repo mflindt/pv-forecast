@@ -7,7 +7,7 @@ so the ablation drops columns rather than building new ones.
 
 import logging
 
-from pvforecast.data.openmeteo import HOURLY_VARS
+from pvforecast.data.openmeteo import MODEL_VARS
 
 logger = logging.getLogger(__name__)
 
@@ -23,8 +23,10 @@ HISTORY = [
     "doy_cos",
 ]
 
-# S2 adds the raw NWP weather of the target hour.
-WEATHER = list(HOURLY_VARS)
+# S2 adds the raw NWP weather of the target hour. Only two of the three radiation
+# columns: GHI = direct + diffuse holds exactly, so all three would make the design
+# matrix singular and every coefficient unidentified.
+WEATHER = list(MODEL_VARS)
 
 # S3 adds transformations of S2: no new information, only a different representation.
 SOLAR_PHYSICS = ["kt", "diffuse_fraction"]

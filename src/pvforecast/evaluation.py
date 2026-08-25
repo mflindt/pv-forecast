@@ -6,6 +6,7 @@ argued in docs/arbeitsplan.md.
 """
 
 import logging
+import math
 
 import numpy as np
 import pandas as pd
@@ -25,6 +26,7 @@ PREDICTION_COLUMNS = (
     "fold",
     "model",
     "featureset",
+    "information_set",
     "seed",
     "y_true_mwh",
     "y_pred_mwh",
@@ -37,6 +39,15 @@ PREDICTION_COLUMNS = (
 # Cloud regimes for the stratified error tables.
 KT_EDGES = (0.0, 0.35, 0.75, np.inf)
 KT_LABELS = ("bedeckt", "teilbewölkt", "klar")
+
+# Yield regimes: the aggregate nMBE averages a positive bias at low feed-in against a
+# strong negative one at high feed-in, so it has to be reported conditionally too.
+CF_QUANTILE_LABELS = ("Q1", "Q2", "Q3", "Q4", "Q5")
+
+STRATA = ("month", "kt_bin", "hour", "cf_quantile")
+
+# Below this a HAC variance on daily differentials is not worth reporting.
+MIN_TEST_DAYS = 30
 
 
 def check_predictions(df: pd.DataFrame) -> pd.DataFrame:
@@ -133,18 +144,36 @@ def evaluate(
 def aggregate_folds(
     metrics: pd.DataFrame, groupby: tuple[str, ...] = ("model", "featureset")
 ) -> pd.DataFrame:
-    """Mean and spread of the fold metrics -- the spread is the uncertainty measure."""
+    """Mean and spread over the folds, plus the separate spread over the repeats.
+
+    The repeats of a stochastic model are collapsed to one value per fold first.
+    Taking the spread over the raw rows instead would mix two sources of variation,
+    deflate the estimate and claim three times the degrees of freedom it has.
+
+    `<score>_std` is the spread over the folds. The folds are seasonally confounded
+    by construction, so it is a seasonal range, not a standard error of the mean.
+    `<score>_sd_seed` is the seed spread within a fold, averaged over folds -- that
+    is the model uncertainty table T4 asks for.
+    """
     if "fold" not in metrics.columns:
         raise ValueError("aggregate_folds braucht eine 'fold'-Spalte")
 
     scores = ["nmae", "nrmse", "nmbe", "mae", "rmse", "mbe"]
-    grouped = metrics.groupby(list(groupby), observed=True)
+    keys = list(groupby)
 
-    agg = grouped[scores].agg(["mean", "std"])
+    by_fold = metrics.groupby(keys + ["fold"], observed=True)[scores]
+    grouped = by_fold.mean().groupby(keys, observed=True)
+
+    agg = grouped.agg(["mean", "std"])
     agg.columns = [f"{score}_{stat}" for score, stat in agg.columns]
+    agg["n_folds"] = grouped.size()
 
-    # Distinct folds, not rows: several seeds per fold must not inflate the count.
-    return agg.join(grouped["fold"].nunique().rename("n_folds")).reset_index()
+    if "seed" in metrics.columns:
+        # NaN where a fold ran once -- a deterministic fit has no seed spread.
+        seed_sd = by_fold.std().groupby(keys, observed=True).mean()
+        agg = agg.join(seed_sd.add_suffix("_sd_seed"))
+
+    return agg.reset_index()
 
 
 def add_skill(
@@ -198,8 +227,23 @@ def stratify(
         df["stratum"] = kt_bins(df["kt"])
     elif by == "hour":
         df["stratum"] = pd.to_datetime(df["time"], utc=True).dt.hour
+    elif by == "cf_quantile":
+        # Binned on the evaluated rows only: over all 24 hours the lower quintiles
+        # would collapse onto the night zeros. Rows outside carry a NaN stratum and
+        # drop out of the groupby.
+        rows = daylight_mask(df["sun_elevation"]) if daylight_only else slice(None)
+        cf = df.loc[rows, "y_true_mwh"] / df.loc[rows, NORMALISERS[normaliser]]
+        # Ranks rather than qcut: the edges stay distinct even when the target has
+        # long ties, where qcut would raise on duplicate bin edges.
+        edges = np.linspace(0.0, 1.0, len(CF_QUANTILE_LABELS) + 1)
+        df["stratum"] = pd.cut(
+            cf.rank(pct=True),
+            bins=edges,
+            labels=CF_QUANTILE_LABELS,
+            include_lowest=True,
+        )
     else:
-        raise ValueError(f"Unbekannte Schichtung: {by!r} (month, kt_bin, hour)")
+        raise ValueError(f"Unbekannte Schichtung: {by!r} ({', '.join(STRATA)})")
 
     return evaluate(
         df,
@@ -207,3 +251,122 @@ def stratify(
         normaliser=normaliser,
         daylight_only=daylight_only,
     )
+
+
+def _hac_variance(x: np.ndarray, lag: int) -> float:
+    """Newey-West long-run variance with a Bartlett kernel."""
+    variance = float(np.var(x, ddof=0))
+    for step in range(1, lag + 1):
+        gamma = float(np.cov(x[step:], x[:-step], ddof=0)[0, 1])
+        variance += 2.0 * (1.0 - step / (lag + 1)) * gamma
+    # Truncation can push the estimate negative on short, weakly dependent samples.
+    return max(variance, 0.0)
+
+
+def _normal_two_sided(t: float) -> float:
+    """Two-sided p-value of a standard normal statistic."""
+    return math.erfc(abs(t) / math.sqrt(2.0))
+
+
+def _daily_loss(
+    predictions: pd.DataFrame, normaliser: str, daylight_only: bool
+) -> pd.DataFrame:
+    """Mean normalised absolute loss per model and UTC day, averaged over repeats."""
+    df = predictions
+    if daylight_only:
+        df = df[daylight_mask(df["sun_elevation"])]
+    loss = (df["y_pred_mwh"] - df["y_true_mwh"]).abs() / df[NORMALISERS[normaliser]]
+    day = pd.to_datetime(df["time"], utc=True).dt.floor("D")
+    return (
+        df.assign(loss=loss, day=day)
+        .groupby(["model", "featureset", "day"], observed=True)["loss"]
+        .mean()
+        .unstack(["model", "featureset"])
+    )
+
+
+def loss_differential_test(
+    predictions: pd.DataFrame,
+    reference: str,
+    normaliser: str = "cap_roll",
+    daylight_only: bool = True,
+) -> pd.DataFrame:
+    """Giacomini-White test of every model against one reference forecast.
+
+    The loss differential is aggregated to whole UTC days first: hourly errors are
+    strongly autocorrelated within a day, and a test on hourly rows would treat
+    ~11 correlated hours as independent evidence. The residual day-to-day dependence
+    is absorbed by a Newey-West HAC variance with the usual automatic bandwidth.
+
+    Giacomini & White (2006), Econometrica 74:1545 rather than Diebold-Mariano:
+    the models are re-estimated on every fold, which is exactly the rolling-scheme
+    case DM does not cover. The statistic is the same, the justification is not.
+
+    Holm-corrected across the comparisons, so the family-wise error rate holds.
+    """
+    check_predictions(predictions)
+    daily = _daily_loss(predictions, normaliser, daylight_only)
+
+    columns = [key for key in daily.columns if key[0] == reference]
+    if len(columns) != 1:
+        raise ValueError(
+            f"Referenz {reference!r} ist nicht eindeutig ({len(columns)} Spalten)"
+        )
+    base = daily[columns[0]]
+
+    rows = []
+    for key in daily.columns:
+        if key == columns[0]:
+            continue
+        diff = (daily[key] - base).dropna().to_numpy()
+        n = len(diff)
+        if n < MIN_TEST_DAYS:
+            raise ValueError(f"{n} gemeinsame Tage reichen nicht für {key}")
+
+        lag = int(np.floor(4.0 * (n / 100.0) ** (2.0 / 9.0)))
+        standard_error = math.sqrt(_hac_variance(diff, lag) / n)
+        mean = float(diff.mean())
+
+        if standard_error > 0:
+            t = mean / standard_error
+        else:
+            # Two forecasts with an identical daily loss are no evidence either way.
+            t = 0.0 if mean == 0.0 else math.inf
+
+        rows.append(
+            {
+                "model": key[0],
+                "featureset": key[1],
+                "reference": reference,
+                "n_days": n,
+                "mean_loss_diff": mean,
+                "hac_se": standard_error,
+                "hac_lag": lag,
+                "t": t,
+                "p_value": _normal_two_sided(t),
+            }
+        )
+
+    out = pd.DataFrame(rows).sort_values("mean_loss_diff").reset_index(drop=True)
+    out["p_holm"] = _holm(out["p_value"].to_numpy())
+    out["normaliser"] = normaliser
+    out["daylight_only"] = daylight_only
+
+    logger.info(
+        f"Giacomini-White gegen {reference}: {len(out)} Vergleiche über "
+        f"{int(out['n_days'].max())} Tage, {int((out['p_holm'] < 0.05).sum())} "
+        f"davon signifikant nach Holm (5 %)"
+    )
+    return out
+
+
+def _holm(p_values: np.ndarray) -> np.ndarray:
+    """Holm step-down correction; monotone and never above 1."""
+    order = np.argsort(p_values)
+    m = len(p_values)
+    adjusted = np.empty(m)
+    running = 0.0
+    for rank, index in enumerate(order):
+        running = max(running, (m - rank) * p_values[index])
+        adjusted[index] = min(running, 1.0)
+    return adjusted

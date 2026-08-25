@@ -1,10 +1,12 @@
 """Tests for the feature stages in pvforecast.featuresets."""
 
+import numpy as np
 import pandas as pd
 import pytest
 
 from pvforecast import featuresets
 from pvforecast.config import PROCESSED_DIR
+from pvforecast.data import openmeteo
 from pvforecast.features import build_features
 
 MODEL_INPUT = PROCESSED_DIR / "pv_weather_hourly.parquet"
@@ -57,3 +59,29 @@ def test_full_stage_matches_the_built_feature_matrix():
     X, _, _ = build_features(pd.read_parquet(MODEL_INPUT).head(24 * 400))
 
     assert set(featuresets.columns(featuresets.FULL_STAGE)) == set(X.columns)
+
+
+def test_no_stage_carries_all_three_radiation_columns():
+    """GHI = direct + diffuse holds exactly, so all three would be rank deficient."""
+    radiation = set(openmeteo.RADIATION_VARS)
+
+    for stage in featuresets.STAGES:
+        assert not radiation <= set(featuresets.columns(stage))
+
+
+def test_the_dropped_column_is_the_redundant_one():
+    assert openmeteo.REDUNDANT_VAR in openmeteo.RADIATION_VARS
+    assert openmeteo.REDUNDANT_VAR not in featuresets.WEATHER
+    # Still fetched and stored -- the raw archive stays complete.
+    assert openmeteo.REDUNDANT_VAR in openmeteo.HOURLY_VARS
+
+
+@pytest.mark.skipif(not MODEL_INPUT.exists(), reason="Modell-Input nicht gebaut")
+def test_the_full_stage_is_not_rank_deficient():
+    """A singular design matrix makes every Ridge coefficient meaningless (U5)."""
+    X, _, _ = build_features(pd.read_parquet(MODEL_INPUT).head(24 * 400))
+    stage = X[featuresets.columns("S3")].dropna()
+
+    standardised = (stage - stage.mean()) / stage.std()
+
+    assert np.linalg.cond(standardised.to_numpy()) < 1e4
