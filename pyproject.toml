@@ -16,6 +16,9 @@ dependencies = [
     "scikit-learn>=1.9.0",
 ]
 
+[project.optional-dependencies]
+gpu = ["tabpfn>=3.0.0"]
+
 [dependency-groups]
 dev = [
     "ipykernel>=7.3.0",
@@ -40,5 +43,4 @@ select = ["E", "W", "F", "I", "UP", "B"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# main.py liegt im Repo-Wurzelverzeichnis; der Smoke-Test importiert es.
 pythonpath = ["."]

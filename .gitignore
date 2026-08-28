@@ -20,6 +20,4 @@ data/processed/
 
 # Trained models do not belong in the repository
 models/
-
-# Documents
 docs/

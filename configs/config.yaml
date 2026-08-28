@@ -15,6 +15,11 @@ include_tso: true
 models: [ridge, lightgbm]
 featuresets: [S3]
 
+# Rows of the most recent training data each model is fitted on.
+# [null] uses the whole window; a list of sizes runs the context sweep.
+contexts: [null]
+daylight_training: false
+
 splits:
   n_folds: 12
   test_days: 90

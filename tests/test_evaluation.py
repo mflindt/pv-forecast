@@ -110,6 +110,7 @@ def test_aggregate_folds_separates_seed_spread_from_fold_spread():
                 {
                     "model": "lightgbm",
                     "featureset": "S3",
+                    "context_rows": 0,
                     "fold": fold,
                     "seed": seed,
                     **{s: level + offset for s in evaluation.SCORES},
@@ -169,3 +170,12 @@ def test_score_produces_every_table(prediction_frame, small_config):
     assert "nmae_std" in results["metrics_agg"].columns
     # Best model first, so the head of the table is the headline result.
     assert results["metrics_agg"]["nmae"].is_monotonic_increasing
+
+
+def test_merge_rejects_runs_with_unequal_coverage(prediction_frame):
+    """A model scored on fewer hours than another is a silent unfair comparison."""
+    full = prediction_frame[prediction_frame["model"] == "R3_combined"]
+    short = prediction_frame[prediction_frame["model"] == "lightgbm"].iloc[:100]
+
+    with pytest.raises(ValueError, match="unterschiedlich viele Stunden"):
+        evaluation.merge_predictions([full, short])

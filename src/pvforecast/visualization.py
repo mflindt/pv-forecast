@@ -724,6 +724,61 @@ def plot_bias(
     return _save(fig, out_dir, "07_systematischer_bias.png")
 
 
+def largest_context(frame: pd.DataFrame) -> pd.DataFrame:
+    """Keep one series per model: the one fitted on the largest context."""
+    largest = frame.groupby("model", observed=True)["context_rows"].transform("max")
+    return frame[frame["context_rows"] == largest]
+
+
+def plot_context_curve(pooled: pd.DataFrame, out_dir: Path) -> Path:
+    """nMAE over the size of the training context, one line per learning model."""
+    block = pooled[
+        (pooled["featureset"] != REFERENCE_FEATURESET) & (pooled["context_rows"] > 0)
+    ]
+    if block["context_rows"].nunique() < 2:
+        raise ValueError("Kontextkurve braucht mindestens zwei Kontextgrößen")
+
+    order = [m for m in model_order(pooled) if m in set(block["model"])]
+    styles = series_styles(order, order[:3])
+
+    fig, ax = plt.subplots(figsize=(7.2, 4.2))
+    for name in order:
+        rows = block[block["model"] == name].sort_values("context_rows")
+        ax.plot(rows["context_rows"], rows["nmae"], label=label(name), **styles[name])
+
+    # The reference stays at the full window, so it is a horizontal guide.
+    reference = pooled[pooled["featureset"] == REFERENCE_FEATURESET].sort_values("nmae")
+    if not reference.empty:
+        best = reference.iloc[0]
+        ax.axhline(best["nmae"], color=CONTEXT_SOFT, linestyle=":", linewidth=1.2)
+        ax.annotate(
+            label(best["model"]),
+            (block["context_rows"].max(), best["nmae"]),
+            textcoords="offset points",
+            xytext=(-4, 4),
+            ha="right",
+            fontsize=8,
+            color=INK_SOFT,
+        )
+
+    # Log scale spreads the small contexts; the ticks stay the sizes we ran.
+    sizes = sorted(block["context_rows"].unique())
+    ax.set_xscale("log")
+    ax.set_xticks(sizes)
+    ax.set_xticklabels([f"{size // 1000}k" for size in sizes])
+    ax.minorticks_off()
+    ax.set_xlabel("Kontextzeilen im Trainingsfenster")
+    ax.set_ylabel("nMAE")
+    ax.set_title("Prognosegüte über der Kontextgröße")
+    ax.grid(alpha=0.6)
+    ax.set_axisbelow(True)
+    handles, names = ax.get_legend_handles_labels()
+    _legend_below(ax, handles, names)
+
+    _note(ax, "Mittel über alle Folds, Tagstunden.", inches=1.02)
+    return _save(fig, out_dir, "08_kontextkurve.png")
+
+
 def make_all(
     out_dir: Path,
     cfg: dict,
@@ -734,6 +789,12 @@ def make_all(
     """Write all figures for a run under <run>/figures."""
     _style()
     figures_dir = Path(out_dir) / "figures"
+    sweep = results["metrics_agg"]
+
+    # Only the curve shows the sweep; the rest shows the largest context.
+    if sweep["context_rows"].nunique() > 1:
+        predictions = largest_context(predictions)
+        results = {name: largest_context(f) for name, f in results.items()}
     pooled = results["metrics_agg"]
 
     jobs = [
@@ -768,6 +829,7 @@ def make_all(
                 lambda: plot_significance(results["tests"], figures_dir),
             ),
         )
+    jobs.append(("08_kontextkurve", lambda: plot_context_curve(sweep, figures_dir)))
 
     written = []
     for name, job in jobs:

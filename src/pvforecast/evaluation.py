@@ -21,6 +21,7 @@ PREDICTION_COLUMNS = (
     "model",
     "featureset",
     "information_set",
+    "context_rows",
     "seed",
     "y_true_mwh",
     "y_pred_mwh",
@@ -29,6 +30,9 @@ PREDICTION_COLUMNS = (
     "sun_elevation",
     "kt",
 )
+
+# What makes one forecast series distinct; a context sweep varies the last key.
+SERIES_KEYS = ("model", "featureset", "context_rows")
 
 SCORES = ["nmae", "nrmse", "nmbe", "mae", "rmse", "mbe"]
 
@@ -57,6 +61,44 @@ def check_predictions(df: pd.DataFrame) -> pd.DataFrame:
         if (df[name] <= 0).any():
             raise ValueError(f"Normierung {name} enthält Werte <= 0")
     return df
+
+
+def merge_predictions(frames: list[pd.DataFrame]) -> pd.DataFrame:
+    """Combine the prediction frames of several runs, e.g. a local and a GPU run."""
+    if not frames:
+        raise ValueError("Keine Prognose-Frames zum Zusammenführen")
+
+    merged = pd.concat(
+        [check_predictions(frame) for frame in frames], ignore_index=True
+    )
+
+    # Differing truth on the same hour means the runs saw different data.
+    truth = merged.groupby(["time", "fold"], observed=True)["y_true_mwh"].nunique()
+    if (truth > 1).any():
+        raise ValueError(
+            f"{int((truth > 1).sum())} Stunden mit abweichender Zielgröße: "
+            "die Läufe stammen aus verschiedenen Datenständen"
+        )
+
+    keys = [*SERIES_KEYS, "seed"]
+    duplicates = int(merged.duplicated([*keys, "fold", "time"]).sum())
+    if duplicates:
+        raise ValueError(
+            f"{duplicates} doppelte Prognosezeilen: ein Modell wurde in mehreren "
+            "Läufen gerechnet (Referenzen im zweiten Lauf abschalten)"
+        )
+
+    # Unequal coverage would compare models over different test sets.
+    covered = merged.groupby(keys, observed=True)["time"].count()
+    if covered.nunique() > 1:
+        raise ValueError(
+            f"Prognosen decken unterschiedlich viele Stunden ab "
+            f"({covered.min()} bis {covered.max()}): die Läufe haben nicht "
+            "dieselben Folds gerechnet"
+        )
+
+    logger.info(f"{len(frames)} Läufe zu {len(merged)} Prognosezeilen zusammengeführt")
+    return merged
 
 
 def daylight_mask(sun_elevation: pd.Series) -> pd.Series:
@@ -92,7 +134,7 @@ def point_metrics(y_true, y_pred, capacity) -> dict[str, float | int]:
 
 def evaluate(
     predictions: pd.DataFrame,
-    groupby: tuple[str, ...] = ("model", "featureset", "fold"),
+    groupby: tuple[str, ...] = (*SERIES_KEYS, "fold"),
     normaliser: str = "cap_roll",
     daylight_only: bool = True,
 ) -> pd.DataFrame:
@@ -127,7 +169,7 @@ def evaluate(
 
 
 def aggregate_folds(
-    metrics: pd.DataFrame, groupby: tuple[str, ...] = ("model", "featureset")
+    metrics: pd.DataFrame, groupby: tuple[str, ...] = SERIES_KEYS
 ) -> pd.DataFrame:
     """Mean and spread across folds and seeds."""
     if "fold" not in metrics.columns:
@@ -214,7 +256,7 @@ def stratify(
 
     return evaluate(
         df,
-        groupby=("model", "featureset", "stratum"),
+        groupby=(*SERIES_KEYS, "stratum"),
         normaliser=normaliser,
         daylight_only=daylight_only,
     )
@@ -273,9 +315,9 @@ def daily_loss(
     day = pd.to_datetime(df["time"], utc=True).dt.floor("D")
     return (
         df.assign(loss=loss, day=day)
-        .groupby(["model", "featureset", "day"], observed=True)["loss"]
+        .groupby([*SERIES_KEYS, "day"], observed=True)["loss"]
         .mean()
-        .unstack(["model", "featureset"])
+        .unstack(list(SERIES_KEYS))
     )
 
 
@@ -314,8 +356,7 @@ def significance_test(
 
         rows.append(
             {
-                "model": key[0],
-                "featureset": key[1],
+                **dict(zip(SERIES_KEYS, key, strict=True)),
                 "reference": reference,
                 "n_days": n,
                 "mean_loss_diff": mean,
@@ -347,11 +388,11 @@ def score(cfg: dict, predictions: pd.DataFrame) -> dict[str, pd.DataFrame]:
 
     per_fold = evaluate(
         predictions,
-        groupby=("model", "featureset", "information_set", "fold", "seed"),
+        groupby=(*SERIES_KEYS, "information_set", "fold", "seed"),
         **settings,
     )
     pooled = evaluate(
-        predictions, groupby=("model", "featureset", "information_set"), **settings
+        predictions, groupby=(*SERIES_KEYS, "information_set"), **settings
     )
 
     if reference in set(predictions["model"]):
@@ -360,8 +401,8 @@ def score(cfg: dict, predictions: pd.DataFrame) -> dict[str, pd.DataFrame]:
     else:
         logger.warning(f"Skill-Referenz {reference!r} fehlt im Lauf, kein Skill Score")
 
-    spread = aggregate_folds(per_fold, groupby=("model", "featureset"))
-    pooled = pooled.merge(spread, on=["model", "featureset"], how="left")
+    spread = aggregate_folds(per_fold, groupby=SERIES_KEYS)
+    pooled = pooled.merge(spread, on=list(SERIES_KEYS), how="left")
 
     results = {
         "metrics_fold": per_fold,
@@ -411,6 +452,7 @@ def summary_table(cfg: dict, pooled: pd.DataFrame, run_id: str = "") -> str:
     columns = {
         "model": "Modell",
         "featureset": "Features",
+        "context_rows": "Kontext",
         "information_set": "Informationsstand",
         "nmae": "nMAE",
         "nmae_std": "sd Fold",
