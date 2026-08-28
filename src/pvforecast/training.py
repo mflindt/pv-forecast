@@ -23,6 +23,9 @@ HOLDOUT_START = pd.Timestamp("2025-01-01", tz="UTC")
 REFERENCE_FEATURESET = "-"
 NO_SEED = 0
 
+# Whole training window
+FULL_CONTEXT = 0
+
 # What each forecast knows about the target hour.
 HISTORY_ONLY = "history_only"
 PERFECT_PROG = "perfect_prog"
@@ -125,6 +128,24 @@ def inner_split(
     return core, validation
 
 
+def limit_context(
+    index: pd.DatetimeIndex,
+    elevation: pd.Series,
+    context_rows: int | None = None,
+    daylight_only: bool = False,
+) -> pd.DatetimeIndex:
+    """Restrict a fit window to daylight hours and to its most recent rows."""
+    if daylight_only:
+        index = index[daylight_mask(elevation.loc[index]).to_numpy()]
+    if context_rows is not None:
+        if context_rows < 1:
+            raise ValueError(f"context_rows muss >= 1 sein, ist {context_rows}")
+        index = index[-context_rows:]
+    if index.empty:
+        raise ValueError("Kontextfenster ist nach der Einschränkung leer")
+    return index
+
+
 def sample_configs(space: dict, budget: int, rng: np.random.Generator) -> list[dict]:
     """Draw distinct configurations; a budget beyond the grid enumerates it fully."""
     if budget < 1:
@@ -158,12 +179,17 @@ def random_search(
     core: pd.DatetimeIndex,
     validation: pd.DatetimeIndex,
     seed: int,
-) -> tuple[dict, float, int]:
+) -> tuple[dict, float | None, int]:
     """Random hyperparameter search on the inner validation block."""
     if not core.intersection(validation).empty:
         raise ValueError("Fit- und Validierungsblock überschneiden sich")
 
     model_spec = models.spec(name)
+    # An untuned model skips the inner fit; searching an empty space costs a pass.
+    if not model_spec.space:
+        logger.info(f"{name}: kein Suchraum, ungetunt")
+        return {}, None, 0
+
     configs = sample_configs(
         model_spec.space, model_spec.budget, np.random.default_rng(seed)
     )
@@ -217,6 +243,7 @@ def _block(
     featureset: str,
     seed: int,
     fold: int,
+    context_rows: int,
     info_set: str | None = None,
 ) -> pd.DataFrame:
     """One block of the long-format prediction frame."""
@@ -227,6 +254,7 @@ def _block(
             "model": model,
             "featureset": featureset,
             "information_set": info_set or information_set(featureset),
+            "context_rows": context_rows,
             "seed": seed,
             "y_true_mwh": meta.loc[index, "pv_mwh"].to_numpy(),
             "y_pred_mwh": pred_mwh.to_numpy(),
@@ -252,6 +280,13 @@ def run_folds(
         folds = folds[: cfg["max_folds"]]
         logger.warning(f"Probelauf: nur die ersten {len(folds)} Folds")
 
+    # None means the whole training window; a list of sizes sweeps the context.
+    contexts = cfg.get("contexts") or [None]
+    daylight_training = cfg.get("daylight_training", False)
+    elevation = X["sun_elevation"]
+    if len(contexts) > 1:
+        logger.info(f"Kontextsweep über {contexts}")
+
     blocks: list[pd.DataFrame] = []
     hyperparams: list[dict] = []
     spans: list[dict] = []
@@ -274,6 +309,7 @@ def run_folds(
         )
         capacity = meta.loc[test, "cap_roll_mwh"]
 
+        # References keep the full window: they are the yardstick of the sweep.
         for name in cfg["references"]:
             reference = models.build(name).fit(X.loc[train], y.loc[train])
             blocks.append(
@@ -286,6 +322,7 @@ def run_folds(
                     featureset=REFERENCE_FEATURESET,
                     seed=NO_SEED,
                     fold=fold,
+                    context_rows=FULL_CONTEXT,
                 )
             )
 
@@ -303,44 +340,57 @@ def run_folds(
                     featureset=REFERENCE_FEATURESET,
                     seed=NO_SEED,
                     fold=fold,
+                    context_rows=FULL_CONTEXT,
                     info_set=OPERATIONAL,
                 )
             )
 
         core, validation = inner_split(train, **cfg["tuning"])
+        # The validation block is a fixed yardstick, so only the fit sets shrink.
+        fit_validation = limit_context(validation, elevation, None, daylight_training)
+
         for stage in cfg["featuresets"]:
             X_stage = preprocessing.select(X, stage)
 
-            for name in cfg["models"]:
-                params, inner_nmae, n_configs = random_search(
-                    name, X_stage, y, core, validation, cfg["seed"]
-                )
-                hyperparams.append(
-                    {
-                        "model": name,
-                        "featureset": stage,
-                        "fold": fold,
-                        "params": params,
-                        "inner_nmae": inner_nmae,
-                        "n_configs": n_configs,
-                    }
-                )
+            for context in contexts:
+                fit_core = limit_context(core, elevation, context, daylight_training)
+                fit_train = limit_context(train, elevation, context, daylight_training)
 
-                for seed in cfg["seeds"]:
-                    estimator = models.build(name, params, seed)
-                    estimator.fit(X_stage.loc[train], y.loc[train])
-                    blocks.append(
-                        _block(
-                            test,
-                            X,
-                            meta,
-                            to_energy(estimator.predict(X_stage.loc[test]), capacity),
-                            model=name,
-                            featureset=stage,
-                            seed=seed,
-                            fold=fold,
-                        )
+                for name in cfg["models"]:
+                    params, inner_nmae, n_configs = random_search(
+                        name, X_stage, y, fit_core, fit_validation, cfg["seed"]
                     )
+                    hyperparams.append(
+                        {
+                            "model": name,
+                            "featureset": stage,
+                            "fold": fold,
+                            "context_rows": context or FULL_CONTEXT,
+                            "fit_rows": len(fit_train),
+                            "params": params,
+                            "inner_nmae": inner_nmae,
+                            "n_configs": n_configs,
+                        }
+                    )
+
+                    for seed in cfg["seeds"]:
+                        estimator = models.build(name, params, seed)
+                        estimator.fit(X_stage.loc[fit_train], y.loc[fit_train])
+                        blocks.append(
+                            _block(
+                                test,
+                                X,
+                                meta,
+                                to_energy(
+                                    estimator.predict(X_stage.loc[test]), capacity
+                                ),
+                                model=name,
+                                featureset=stage,
+                                seed=seed,
+                                fold=fold,
+                                context_rows=context or FULL_CONTEXT,
+                            )
+                        )
 
     predictions = pd.concat(blocks, ignore_index=True)
     logger.info(

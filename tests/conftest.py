@@ -77,6 +77,7 @@ def prediction_frame() -> pd.DataFrame:
                     "information_set": "history_only"
                     if name.startswith("R")
                     else "perfect_prog",
+                    "context_rows": 0,
                     "seed": 0 if name.startswith("R") else 42,
                     "y_true_mwh": truth,
                     "y_pred_mwh": truth + rng.normal(0, error, len(index)),

@@ -24,6 +24,8 @@ def fit_window(dataset):
 
 def build(name: str, params: dict | None = None, seed: int = models.DEFAULT_SEED):
     """Instantiate a forecaster; LightGBM gets a small round count for the tests."""
+    if name == models.TabPFN3.name:
+        pytest.importorskip("tabpfn", reason="TabPFN-3 läuft nur mit dem gpu-Extra")
     params = dict(params or {})
     if name == "lightgbm":
         params.setdefault("n_estimators", 60)
@@ -131,8 +133,7 @@ def test_every_tuned_model_shares_one_budget():
 
 def test_search_spaces_are_drawable():
     for name, spec in MODELS.items():
-        assert spec.space, f"{name} hat keinen Suchraum"
-        assert all(len(values) > 0 for values in spec.space.values())
+        assert all(len(values) > 0 for values in spec.space.values()), name
 
 
 def test_unknown_name_raises():

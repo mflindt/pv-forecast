@@ -173,3 +173,24 @@ def test_pipeline_writes_every_artefact_including_figures(
     assert len(figures) >= 7
     assert figures[0] == "00_splits.png"
     assert (out.parent / "latest").resolve() == out
+
+
+def test_limit_context_keeps_the_most_recent_rows(dataset):
+    """Taking the oldest rows instead would invert the whole context experiment."""
+    X, _, _ = dataset
+    window = X.index[:1000]
+
+    limited = training.limit_context(window, X["sun_elevation"], context_rows=100)
+    assert len(limited) == 100
+    assert limited[-1] == window[-1]
+    assert limited[0] == window[-100]
+
+
+def test_limit_context_drops_only_night_hours(dataset):
+    """Daylight training must not move the window, only thin it."""
+    X, _, _ = dataset
+    window = X.index[:1000]
+
+    limited = training.limit_context(window, X["sun_elevation"], daylight_only=True)
+    assert 0 < len(limited) < len(window)
+    assert (X.loc[limited, "sun_elevation"] > 5.0).all()

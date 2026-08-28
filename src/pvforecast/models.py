@@ -211,6 +211,32 @@ class LightGBM:
         return pd.Series(pred, index=X.index, name=self.name).clip(CF_FLOOR)
 
 
+class TabPFN3:
+    """TabPFN-3, a tabular foundation model; fitting only stores the context."""
+
+    name = "tabpfn3"
+
+    def __init__(self, seed: int = DEFAULT_SEED, **params: Any):
+        self.seed = seed
+        self.params = params
+        self.model_ = None
+
+    def fit(self, X: pd.DataFrame, y: pd.Series) -> "TabPFN3":
+        # Imported late so a run without the gpu extra never needs torch.
+        from tabpfn import TabPFNRegressor
+
+        self.model_ = TabPFNRegressor(random_state=self.seed, **self.params)
+        self.model_.fit(X, y)
+        logger.debug(f"TabPFN-3: Kontext aus {len(X)} Zeilen")
+        return self
+
+    def predict(self, X: pd.DataFrame) -> pd.Series:
+        if self.model_ is None:
+            raise ValueError("TabPFN-3 wurde nicht gefittet")
+        pred = self.model_.predict(X)
+        return pd.Series(pred, index=X.index, name=self.name).clip(CF_FLOOR)
+
+
 @dataclass(frozen=True)
 class ModelSpec:
     """A learning model with its search space and tuning budget."""
@@ -250,6 +276,14 @@ MODELS: dict[str, ModelSpec] = {
         },
         budget=TUNED_BUDGET,
         library="lightgbm",
+        preprocessing="keine",
+    ),
+    TabPFN3.name: ModelSpec(
+        factory=TabPFN3,
+        # Empty on purpose: the untuned model is the treatment, not an oversight.
+        space={},
+        budget=1,
+        library="tabpfn",
         preprocessing="keine",
     ),
 }
