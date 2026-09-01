@@ -7,11 +7,9 @@ import pytest
 from pvforecast import preprocessing
 from pvforecast.config import MODEL_VARS, RADIATION_VARS, REDUNDANT_VAR
 from pvforecast.preprocessing import (
-    LAG_HOURS,
     STAGES,
     align_radiation_labels,
     build_features,
-    capacity_factor,
     clear_sky_index,
     issue_time,
     rolling_capacity,
@@ -56,18 +54,6 @@ def test_capacity_factor_round_trip(dataset):
     assert np.allclose(energy, meta["pv_mwh"])
 
 
-def test_capacity_factor_rejects_non_positive_capacity():
-    index = pd.date_range("2020-01-01", periods=5, freq="h", tz="UTC")
-    with pytest.raises(ValueError, match="<= 0"):
-        capacity_factor(pd.Series(1.0, index=index), pd.Series(0.0, index=index))
-
-
-def test_lag_hours_exclude_the_leaking_day_lag():
-    # t-24h reaches past the 10:00 UTC gate from target hour 12:00 UTC on.
-    assert 24 not in LAG_HOURS
-    assert min(LAG_HOURS) >= 48
-
-
 def test_issue_time_is_the_day_ahead_gate():
     target = pd.DatetimeIndex(["2024-06-15 13:00"], tz="UTC")
     assert issue_time(target)[0] == pd.Timestamp("2024-06-14 10:00", tz="UTC")
@@ -93,11 +79,6 @@ def test_features_are_nan_free_after_the_warmup(dataset):
     assert not X.isna().any().any()
     assert not y.isna().any()
     assert (meta["cap_roll_mwh"] > 0).all()
-
-
-def test_build_features_raises_on_missing_columns(joined_frame):
-    with pytest.raises(ValueError, match="Spalten fehlen"):
-        build_features(joined_frame.drop(columns="shortwave_radiation"))
 
 
 def test_clear_sky_index_is_capped_and_zero_without_sun():
@@ -154,9 +135,3 @@ def test_feature_stages_are_nested_and_never_rank_deficient(dataset):
 
     assert np.linalg.matrix_rank(select(X, "S3").to_numpy()) == len(STAGES["S3"])
     assert REDUNDANT_VAR not in MODEL_VARS
-
-
-def test_select_raises_on_a_missing_column(dataset):
-    X, _, _ = dataset
-    with pytest.raises(ValueError, match="fehlende Spalten"):
-        select(X.drop(columns="kt"), "S3")

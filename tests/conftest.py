@@ -110,6 +110,7 @@ def prediction_frame() -> pd.DataFrame:
 @pytest.fixture
 def small_config() -> dict:
     return {
+        "name": "test_run",
         "seed": 42,
         "seeds": [42],
         "splits": {"n_folds": 1, "test_days": 40, "gap_hours": 48, "mode": "expanding"},
@@ -124,5 +125,4 @@ def small_config() -> dict:
         "featuresets": ["S3"],
         "references": ["R0_climatology", "R1_persistence", "R3_combined"],
         "include_tso": False,
-        "output_dir": "reports",
     }

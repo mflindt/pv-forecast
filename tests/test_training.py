@@ -225,6 +225,7 @@ def test_pipeline_writes_every_artefact_including_figures(
     monkeypatch.setattr(
         preprocessing, "build_dataset", lambda cfg: (X, y, meta, pd.Series(dtype=float))
     )
+    monkeypatch.setattr(preprocessing, "ensure_model_input", lambda force=False: None)
     monkeypatch.setattr(main, "PROJECT_ROOT", tmp_path)
 
     out = main.run_pipeline(small_config)
@@ -238,15 +239,22 @@ def test_pipeline_writes_every_artefact_including_figures(
         "tests.csv",
         "folds.csv",
         "hyperparams.json",
-        "summary.md",
         "config_resolved.yaml",
     }
     assert expected <= {p.name for p in out.iterdir()}
+    assert out == tmp_path / "evaluation" / small_config["name"]
 
     figures = sorted(p.name for p in (out / "figures").glob("*.png"))
     assert len(figures) >= 7
     assert figures[0] == "00_splits.png"
-    assert (out.parent / "latest").resolve() == out
+
+    # Every model also gets its own folder with its own rows and figures.
+    for model in ("ridge", "R3_combined"):
+        folder = out / "models" / model
+        assert {"metrics_agg.csv", "metrics_fold.csv", "strata.csv"} <= {
+            p.name for p in folder.iterdir()
+        }
+        assert len(list(folder.glob("*.png"))) == 4
 
 
 def test_limit_context_keeps_the_most_recent_rows(dataset):

@@ -1,0 +1,88 @@
+name: baseline
+seed: 42
+seeds:
+- 42
+- 43
+- 44
+references:
+- R0_climatology
+- R1_persistence
+- R2_clearsky_persistence
+- R3_combined
+include_tso: true
+models:
+- ridge
+- lightgbm
+featuresets:
+- S3
+contexts:
+- null
+daylight_training: false
+splits:
+  n_folds: 12
+  test_days: 90
+  gap_hours: 48
+  mode: expanding
+tuning:
+  validation_days: 90
+  gap_hours: 48
+evaluation:
+  normaliser: cap_roll
+  daylight_only: true
+  skill_reference: R3_combined
+  significance: true
+git_commit: d7a605e-dirty
+created_utc: '2026-09-01T14:08:09Z'
+search_spaces:
+  ridge:
+    alpha:
+    - 0.001
+    - 0.005994842503189409
+    - 0.03593813663804628
+    - 0.21544346900318845
+    - 1.291549665014884
+    - 7.742636826811269
+    - 46.41588833612782
+    - 278.2559402207126
+    - 1668.100537200059
+    - 10000.0
+  lightgbm:
+    learning_rate:
+    - 0.01
+    - 0.02
+    - 0.05
+    - 0.1
+    num_leaves:
+    - 15
+    - 31
+    - 63
+    - 127
+    - 255
+    min_child_samples:
+    - 20
+    - 50
+    - 100
+    - 200
+    colsample_bytree:
+    - 0.6
+    - 0.8
+    - 1.0
+    subsample:
+    - 0.6
+    - 0.8
+    - 1.0
+    reg_lambda:
+    - 0.0
+    - 0.1
+    - 1.0
+    - 10.0
+environment:
+  python: 3.12.5
+  platform: macOS-26.5.2-arm64-arm-64bit
+  packages:
+    numpy: 2.4.6
+    pandas: 3.0.3
+    scikit-learn: 1.9.0
+    lightgbm: 4.6.0
+    pvlib: 0.15.1
+    tabpfn: 8.5.0

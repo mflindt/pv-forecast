@@ -1,6 +1,7 @@
 """Data preprocessing and feature engineering pipeline."""
 
 import logging
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -17,6 +18,7 @@ from pvforecast.config import (
     PROCESSED_DIR,
     PV_HOURLY,
     PV_RAW,
+    PV_RAW_HOURLY,
     RADIATION_VARS,
     SITES,
     WEATHER_RAW,
@@ -27,6 +29,9 @@ logger = logging.getLogger(__name__)
 PV_COLUMN = "pv_mwh"
 FORECAST_COLUMN = "pv_fcst_mwh"
 HOURS_PER_DAY = 24
+
+# Everything ingest.py writes; the derived tables are rebuilt when one is newer.
+RAW_FILES = (PV_RAW, PV_RAW_HOURLY, FORECAST_RAW, WEATHER_RAW, CAPACITY_RAW)
 
 # 2015 serves as warm-up for the 365-day capacity window; model data starts after it.
 DATA_START = pd.Timestamp("2016-01-01", tz="UTC")
@@ -373,7 +378,7 @@ def build_dataset(cfg: dict) -> tuple[pd.DataFrame, pd.Series, pd.DataFrame, pd.
     return X, y, meta, tso
 
 
-def main() -> None:
+def build_model_input() -> None:
     """Rebuild data/interim and data/processed from the raw files."""
     INTERIM_DIR.mkdir(parents=True, exist_ok=True)
     PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
@@ -388,6 +393,25 @@ def main() -> None:
     logger.info(f"{len(joined)} Stunden gespeichert: {MODEL_INPUT}")
 
 
+def ensure_model_input(force: bool = False) -> Path:
+    """Bring data/ up to date"""
+    missing = [path for path in RAW_FILES if not path.is_file()]
+    if missing:
+        logger.info(f"Rohdaten fehlen: {', '.join(p.name for p in missing)}")
+        from pvforecast import ingest
+
+        ingest.main()
+
+    if not force and MODEL_INPUT.is_file():
+        newest_raw = max(path.stat().st_mtime for path in RAW_FILES)
+        if MODEL_INPUT.stat().st_mtime >= newest_raw:
+            logger.info(f"Modell-Input ist aktuell: {MODEL_INPUT.name}")
+            return MODEL_INPUT
+
+    build_model_input()
+    return MODEL_INPUT
+
+
 if __name__ == "__main__":
-    config.setup_logging("preprocessing")
-    main()
+    config.setup_logging()
+    ensure_model_input(force=True)

@@ -14,10 +14,9 @@ __pycache__/
 .DS_Store
 
 # Runtime
-logs/
 data/interim/
 data/processed/
 
-# Trained models do not belong in the repository
-models/
-docs/
+# Not part of the repository; /models/ only at the root, evaluation/*/models/ stays
+/models/
+/docs/

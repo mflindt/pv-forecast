@@ -1,4 +1,6 @@
-# Run settings
+# Base run: every other config extends this one and states only its differences.
+
+name: baseline
 
 # Seed for the search and the deterministic models.
 seed: 42
@@ -26,7 +28,6 @@ splits:
   gap_hours: 48
   mode: expanding
 
-
 tuning:
   validation_days: 90
   gap_hours: 48
@@ -36,5 +37,3 @@ evaluation:
   daylight_only: true
   skill_reference: R3_combined
   significance: true
-
-output_dir: reports

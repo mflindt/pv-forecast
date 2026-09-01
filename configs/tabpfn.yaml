@@ -1,32 +1,12 @@
 # TabPFN-3 on a GPU; references stay off so the merge finds no duplicates.
 
-seed: 42
-seeds: [42]
+extends: config.yaml
+name: tabpfn
 
+seeds: [42]
 references: []
 include_tso: false
 models: [tabpfn3]
-featuresets: [S3]
 
 # Use the same values as in context_sweep.yaml for the context curve.
-contexts: [null]
-daylight_training: false
-
-# Set holdout: true for the single hold-out run, as in holdout.yaml.
-splits:
-  n_folds: 12
-  test_days: 90
-  gap_hours: 48
-  mode: expanding
-
-tuning:
-  validation_days: 90
-  gap_hours: 48
-
-evaluation:
-  normaliser: cap_roll
-  daylight_only: true
-  skill_reference: R3_combined
-  significance: true
-
-output_dir: reports
+contexts: [5000, 10000, 20000, 35000, 50000, null]
