@@ -4,20 +4,21 @@ import itertools
 import logging
 import math
 import random
+import time
+from collections.abc import Callable
+from typing import Any
 
 import numpy as np
 import pandas as pd
 
 from pvforecast import models, preprocessing
+from pvforecast.config import HOLDOUT_START
 from pvforecast.evaluation import daylight_mask
 from pvforecast.preprocessing import to_energy
 
 logger = logging.getLogger(__name__)
 
 HOURS_PER_DAY = 24
-
-# 2025 is the untouched hold-out
-HOLDOUT_START = pd.Timestamp("2025-01-01", tz="UTC")
 
 # References read named columns instead of a feature stage, and carry no seed.
 REFERENCE_FEATURESET = "-"
@@ -39,6 +40,13 @@ def set_seed(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
     logger.info(f"Seed gesetzt: {seed}")
+
+
+def timed(call: Callable, *args, **kwargs) -> tuple[Any, float]:
+    """Run a call and return its result together with the seconds it took."""
+    start = time.perf_counter()
+    result = call(*args, **kwargs)
+    return result, time.perf_counter() - start
 
 
 def complete_days(index: pd.DatetimeIndex) -> pd.DatetimeIndex:
@@ -103,6 +111,53 @@ def rolling_origin_days(
         f"Gap {gap_days} Tage, Hold-out ab {HOLDOUT_START:%Y-%m-%d} ausgeschlossen"
     )
     return folds
+
+
+def holdout_fold(
+    index: pd.DatetimeIndex, gap_hours: int = 48
+) -> tuple[pd.DatetimeIndex, pd.DatetimeIndex]:
+    """The confirmation fold: fit on everything before the hold-out, test on it."""
+    if gap_hours < 0:
+        raise ValueError("gap_hours darf nicht negativ sein")
+
+    test = index[index >= HOLDOUT_START]
+    if test.empty:
+        raise ValueError(f"Kein Index-Anteil ab dem Hold-out {HOLDOUT_START:%Y-%m-%d}")
+
+    history = index[index < HOLDOUT_START]
+    if history.empty:
+        raise ValueError(f"Kein Index-Anteil vor dem Hold-out {HOLDOUT_START:%Y-%m-%d}")
+
+    days = complete_days(history)
+    gap_days = math.ceil(gap_hours / HOURS_PER_DAY)
+    if len(days) - gap_days < 1:
+        raise ValueError(
+            f"{len(days)} Tage Historie reichen nicht für {gap_days} Tage Gap"
+        )
+
+    train = hours_of(history, days[: len(days) - gap_days])
+    return train, hours_of(test, complete_days(test))
+
+
+def build_folds(
+    index: pd.DatetimeIndex, holdout: bool = False, **splits
+) -> list[tuple[pd.DatetimeIndex, pd.DatetimeIndex]]:
+    """The fold layout of a run: the rolling origin, or the single hold-out fold."""
+    if not holdout:
+        return rolling_origin_days(index, **splits)
+
+    ignored = sorted(key for key in splits if key != "gap_hours")
+    if ignored:
+        logger.warning(f"Hold-out-Modus: {', '.join(ignored)} bleibt ohne Wirkung")
+
+    gap = {"gap_hours": splits["gap_hours"]} if "gap_hours" in splits else {}
+    train, test = holdout_fold(index, **gap)
+    logger.warning(
+        f"Hold-out-Modus: Test ist {HOLDOUT_START:%Y} "
+        f"({test.min():%Y-%m-%d} bis {test.max():%Y-%m-%d}), "
+        f"Training bis {train.max():%Y-%m-%d} — dieser Lauf ist einmalig vorgesehen"
+    )
+    return [(train, test)]
 
 
 def inner_split(
@@ -226,6 +281,13 @@ def random_search(
     return best_params, best_score, len(configs)
 
 
+def seeds_for(name: str, seeds: list[int]) -> list[int]:
+    """Repeats of one model; a deterministic fit gives the same forecast every time."""
+    if not seeds:
+        raise ValueError("seeds darf nicht leer sein")
+    return seeds[:1] if models.spec(name).deterministic else seeds
+
+
 def information_set(featureset: str) -> str:
     """Whether a feature stage carries target-hour weather, and is thus perfect prog."""
     if featureset == REFERENCE_FEATURESET:
@@ -244,6 +306,8 @@ def _block(
     seed: int,
     fold: int,
     context_rows: int,
+    fit_seconds: float,
+    predict_seconds: float,
     info_set: str | None = None,
 ) -> pd.DataFrame:
     """One block of the long-format prediction frame."""
@@ -262,6 +326,8 @@ def _block(
             "cap_ac_mw": meta.loc[index, "cap_ac_mw"].to_numpy(),
             "sun_elevation": X.loc[index, "sun_elevation"].to_numpy(),
             "kt": X.loc[index, "kt"].to_numpy(),
+            "fit_seconds": fit_seconds,
+            "predict_seconds": predict_seconds,
         }
     )
 
@@ -275,7 +341,7 @@ def run_folds(
 ) -> tuple[pd.DataFrame, list[dict], pd.DataFrame]:
     """Fit all models on each fold and collect predictions."""
     set_seed(cfg["seed"])
-    folds = rolling_origin_days(X.index, **cfg["splits"])
+    folds = build_folds(X.index, **cfg["splits"])
     if cfg.get("max_folds"):
         folds = folds[: cfg["max_folds"]]
         logger.warning(f"Probelauf: nur die ersten {len(folds)} Folds")
@@ -311,18 +377,23 @@ def run_folds(
 
         # References keep the full window: they are the yardstick of the sweep.
         for name in cfg["references"]:
-            reference = models.build(name).fit(X.loc[train], y.loc[train])
+            reference, fit_seconds = timed(
+                models.build(name).fit, X.loc[train], y.loc[train]
+            )
+            cf, predict_seconds = timed(reference.predict, X.loc[test])
             blocks.append(
                 _block(
                     test,
                     X,
                     meta,
-                    to_energy(reference.predict(X.loc[test]), capacity),
+                    to_energy(cf, capacity),
                     model=name,
                     featureset=REFERENCE_FEATURESET,
                     seed=NO_SEED,
                     fold=fold,
                     context_rows=FULL_CONTEXT,
+                    fit_seconds=fit_seconds,
+                    predict_seconds=predict_seconds,
                 )
             )
 
@@ -341,6 +412,9 @@ def run_folds(
                     seed=NO_SEED,
                     fold=fold,
                     context_rows=FULL_CONTEXT,
+                    # Published, not fitted here: there is no runtime to record.
+                    fit_seconds=0.0,
+                    predict_seconds=0.0,
                     info_set=OPERATIONAL,
                 )
             )
@@ -357,8 +431,14 @@ def run_folds(
                 fit_train = limit_context(train, elevation, context, daylight_training)
 
                 for name in cfg["models"]:
-                    params, inner_nmae, n_configs = random_search(
-                        name, X_stage, y, fit_core, fit_validation, cfg["seed"]
+                    (params, inner_nmae, n_configs), search_seconds = timed(
+                        random_search,
+                        name,
+                        X_stage,
+                        y,
+                        fit_core,
+                        fit_validation,
+                        cfg["seed"],
                     )
                     hyperparams.append(
                         {
@@ -370,25 +450,32 @@ def run_folds(
                             "params": params,
                             "inner_nmae": inner_nmae,
                             "n_configs": n_configs,
+                            # The price of the tuning budget, 0 for an untuned model.
+                            "search_seconds": round(search_seconds, 3),
                         }
                     )
 
-                    for seed in cfg["seeds"]:
+                    for seed in seeds_for(name, cfg["seeds"]):
                         estimator = models.build(name, params, seed)
-                        estimator.fit(X_stage.loc[fit_train], y.loc[fit_train])
+                        _, fit_seconds = timed(
+                            estimator.fit, X_stage.loc[fit_train], y.loc[fit_train]
+                        )
+                        cf, predict_seconds = timed(
+                            estimator.predict, X_stage.loc[test]
+                        )
                         blocks.append(
                             _block(
                                 test,
                                 X,
                                 meta,
-                                to_energy(
-                                    estimator.predict(X_stage.loc[test]), capacity
-                                ),
+                                to_energy(cf, capacity),
                                 model=name,
                                 featureset=stage,
                                 seed=seed,
                                 fold=fold,
                                 context_rows=context or FULL_CONTEXT,
+                                fit_seconds=fit_seconds,
+                                predict_seconds=predict_seconds,
                             )
                         )
 

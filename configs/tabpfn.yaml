@@ -8,10 +8,11 @@ include_tso: false
 models: [tabpfn3]
 featuresets: [S3]
 
-# Für die Kontextkurve dieselben Werte wie in context_sweep.yaml setzen.
+# Use the same values as in context_sweep.yaml for the context curve.
 contexts: [null]
 daylight_training: false
 
+# Set holdout: true for the single hold-out run, as in holdout.yaml.
 splits:
   n_folds: 12
   test_days: 90

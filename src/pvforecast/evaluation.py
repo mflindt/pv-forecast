@@ -29,6 +29,8 @@ PREDICTION_COLUMNS = (
     "cap_ac_mw",
     "sun_elevation",
     "kt",
+    "fit_seconds",
+    "predict_seconds",
 )
 
 # What makes one forecast series distinct; a context sweep varies the last key.
@@ -99,6 +101,35 @@ def merge_predictions(frames: list[pd.DataFrame]) -> pd.DataFrame:
 
     logger.info(f"{len(frames)} Läufe zu {len(merged)} Prognosezeilen zusammengeführt")
     return merged
+
+
+def runtime(predictions: pd.DataFrame) -> pd.DataFrame:
+    """Seconds per fit and per prediction; comparable only within one machine."""
+    check_predictions(predictions)
+
+    # One block per fit, so the two costs repeat over all rows of that block.
+    per_fit = predictions.groupby([*SERIES_KEYS, "fold", "seed"], observed=True)[
+        ["fit_seconds", "predict_seconds"]
+    ].first()
+
+    out = (
+        per_fit.groupby(list(SERIES_KEYS), observed=True)
+        .agg(
+            n_fits=("fit_seconds", "size"),
+            fit_seconds=("fit_seconds", "mean"),
+            fit_seconds_total=("fit_seconds", "sum"),
+            predict_seconds=("predict_seconds", "mean"),
+        )
+        .round(4)
+        .reset_index()
+        .sort_values("fit_seconds_total", ascending=False)
+    )
+
+    logger.info(
+        f"Laufzeit: {out['fit_seconds_total'].sum():.1f} s für "
+        f"{int(out['n_fits'].sum())} Fits"
+    )
+    return out.reset_index(drop=True)
 
 
 def daylight_mask(sun_elevation: pd.Series) -> pd.Series:
@@ -408,6 +439,7 @@ def score(cfg: dict, predictions: pd.DataFrame) -> dict[str, pd.DataFrame]:
         "metrics_fold": per_fold,
         "metrics_agg": pooled.sort_values("nmae").reset_index(drop=True),
         "strata": stratify_all(predictions, **settings),
+        "runtime": runtime(predictions),
     }
     if cfg["evaluation"].get("significance") and reference in set(predictions["model"]):
         results["tests"] = significance_test(predictions, reference, **settings)
@@ -473,7 +505,7 @@ def summary_table(cfg: dict, pooled: pd.DataFrame, run_id: str = "") -> str:
         [
             "# Ergebnisse" + (f" {run_id}" if run_id else ""),
             "",
-            f"{folds} Folds, ausgewertet über {hours}, "
+            f"{folds} {'Fold' if folds == 1 else 'Folds'}, ausgewertet über {hours}, "
             f"Normierung `{evaluation['normaliser']}`.",
             f"Skill Score gegen `{evaluation['skill_reference']}`.",
             "`perfect_prog` (ERA5) und `operational` (ÜNB) sind nicht vergleichbar.",

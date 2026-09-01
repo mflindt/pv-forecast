@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
+from pvforecast.config import HOLDOUT_START  # noqa: E402
 from pvforecast.evaluation import (  # noqa: E402
     KT_LABELS,
     NORMALISERS,
@@ -240,6 +241,9 @@ def _first_seed(predictions: pd.DataFrame) -> pd.DataFrame:
 
 def plot_splits(spans: pd.DataFrame, out_dir: Path) -> Path:
     """Training and test windows for each fold."""
+    holdout = bool(
+        (pd.to_datetime(spans["test_start"], utc=True) >= HOLDOUT_START).any()
+    )
     fig, ax = plt.subplots(figsize=(9, 0.40 * len(spans) + 2.0))
 
     for _, row in spans.iterrows():
@@ -269,14 +273,19 @@ def plot_splits(spans: pd.DataFrame, out_dir: Path) -> Path:
     ax.set_yticklabels([f"Fold {f}" for f in spans["fold"]])
     ax.invert_yaxis()
     ax.set_xlabel("Zeit (UTC)")
-    ax.set_title("Rolling-Origin-Splits")
+    ax.set_title("Hold-out-Split" if holdout else "Rolling-Origin-Splits")
     ax.grid(axis="x", alpha=0.6)
     ax.set_axisbelow(True)
 
     gap_days = (
         spans["test_start"] - spans["train_end"]
     ).dt.total_seconds().max() / 86400
-    _note(ax, f"Gap {gap_days:.0f} Tage. Hold-out 2025 ausgeschlossen.", inches=1.02)
+    fate = (
+        f"Test ist das Hold-out-Jahr {HOLDOUT_START:%Y}."
+        if holdout
+        else f"Hold-out {HOLDOUT_START:%Y} ausgeschlossen."
+    )
+    _note(ax, f"Gap {gap_days:.0f} Tage. {fate}", inches=1.02)
     return _save(fig, out_dir, "00_splits.png")
 
 

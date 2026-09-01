@@ -246,6 +246,7 @@ class ModelSpec:
     budget: int
     library: str
     preprocessing: str
+    deterministic: bool = False
 
 
 REFERENCES: dict[str, type] = {
@@ -263,6 +264,7 @@ MODELS: dict[str, ModelSpec] = {
         budget=10,
         library="scikit-learn",
         preprocessing="StandardScaler",
+        deterministic=True,
     ),
     LightGBM.name: ModelSpec(
         factory=LightGBM,

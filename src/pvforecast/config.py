@@ -4,6 +4,7 @@ import logging
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pandas as pd
 import yaml
 
 logger = logging.getLogger(__name__)
@@ -59,6 +60,7 @@ MODEL_VARS = [name for name in HOURLY_VARS if name != REDUNDANT_VAR]
 # # 2015–2025; year boundaries are in UTC
 PERIOD_START = "2014-12-31 23:00"
 PERIOD_END = "2025-12-31 23:00"
+HOLDOUT_START = pd.Timestamp("2025-01-01", tz="UTC")
 
 
 def load_config(path: Path | str = DEFAULT_CONFIG) -> dict:

@@ -1,0 +1,32 @@
+seed: 42
+seeds: [42, 43, 44]
+
+references:
+  - R0_climatology
+  - R1_persistence
+  - R2_clearsky_persistence
+  - R3_combined
+
+include_tso: true
+models: [ridge, lightgbm]
+featuresets: [S3]
+
+contexts: [null]
+daylight_training: false
+
+# One fold; n_folds, test_days, and mode have no effect here.
+splits:
+  holdout: true
+  gap_hours: 48
+
+tuning:
+  validation_days: 90
+  gap_hours: 48
+
+evaluation:
+  normaliser: cap_roll
+  daylight_only: true
+  skill_reference: R3_combined
+  significance: true
+
+output_dir: reports
