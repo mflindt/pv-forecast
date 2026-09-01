@@ -184,7 +184,7 @@ def write_train(
     """What the fold loop produces; the only artefact that travels between machines."""
     predictions.to_parquet(out / "predictions.parquet", index=False)
     spans.to_csv(out / "folds.csv", index=False)
-    # None after a merge: the tuning happened in the runs this one reads.
+    # None only if no source run carried a tuning record.
     if hyperparams is not None:
         (out / "hyperparams.json").write_text(
             json.dumps(hyperparams, indent=2, ensure_ascii=False) + "\n",
@@ -199,6 +199,23 @@ def read_folds(cfg: dict, run: str) -> pd.DataFrame:
     if not path.is_file():
         raise FileNotFoundError(f"Keine Fold-Tabelle in {run}: {path}")
     return pd.read_csv(path, parse_dates=FOLD_DATES)
+
+
+def read_hyperparams(cfg: dict, names: list[str]) -> list[dict]:
+    """Tuning records of the merged runs; without them the search cost is lost."""
+    parent = PROJECT_ROOT / cfg["output_dir"]
+    entries: list[dict] = []
+    for name in names:
+        path = parent / name / "hyperparams.json"
+        if not path.is_file():
+            logger.warning(f"Kein Tuning-Protokoll in {name}: {path.name}")
+            continue
+        # The run tags the machine: GPU and laptop seconds are not one scale.
+        entries += [
+            {"run": name, **entry}
+            for entry in json.loads(path.read_text(encoding="utf-8"))
+        ]
+    return entries
 
 
 def write_evaluation(out: Path, cfg: dict, results: dict[str, pd.DataFrame]) -> None:
@@ -244,6 +261,7 @@ def run_pipeline(cfg: dict, stage: str = "all", runs: list[str] | None = None) -
         predictions = load_runs(cfg, runs)
         # The fold layout is identical across merged runs; keep the run self-contained.
         spans = read_folds(cfg, runs[0])
+        hyperparams = read_hyperparams(cfg, runs) or None
         sources = {"sources": list(runs)}
     else:
         X, y, meta, tso = preprocessing.build_dataset(cfg)

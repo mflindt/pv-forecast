@@ -4,9 +4,7 @@ Day-ahead-Prognose der deutschen PV-Einspeisung.
 
 Dieses Repository enthält den Code zu meinem Forschungsbeleg. Die Arbeit untersucht,
 wie sich die Prognosegüte eines Tabular Foundation Model gegenüber hyperparameter-
-optimiertem Gradient Boosting mit zunehmender Kontextgröße verändert — in einem
-Prognoseproblem unter zeitlichem Distribution Shift. Die Forschungsfrage steht in
-[`docs/masterplan.md`](docs/masterplan.md).
+optimiertem Gradient Boosting mit zunehmender Kontextgröße verändert.
 
 Der Datensatz umfasst die stündliche PV-Einspeisung Deutschlands von 2016 bis 2024
 aus SMARD, dazu stündliche Wetterdaten aus der ERA5-Reanalyse über fünf Gitterpunkte
@@ -63,12 +61,6 @@ git clone <url> && cd pv-forecast
 uv sync
 ```
 
-Unter macOS braucht LightGBM zusätzlich OpenMP, das nicht im Wheel enthalten ist:
-
-```bash
-brew install libomp
-```
-
 ### Einen Lauf ausführen
 
 ```bash
@@ -82,36 +74,6 @@ Für einen schnellen Probelauf genügt ein einzelner Fold:
 
 ```bash
 uv run python main.py --folds 1
-```
-
-### Training und Auswertung trennen
-
-TabPFN-3 braucht eine GPU, die übrigen Modelle nicht. Deshalb lässt sich die
-Fold-Schleife von der Auswertung trennen. Zwischen den Maschinen wandert nur
-`predictions.parquet`, nie ein Modell.
-
-```bash
-# lokal: Referenzen, Ridge, LightGBM
-uv run python main.py --stage train
-
-# auf Colab, siehe notebooks/06_colab_tabpfn.ipynb
-uv run python main.py --config configs/tabpfn.yaml --stage train
-
-# lokal: beide Prognose-Frames gemeinsam auswerten
-uv run python main.py --stage evaluate --runs <lokaler_lauf> <colab_lauf>
-```
-
-Der Merge bricht ab, wenn dieselbe Modellreihe in beiden Läufen vorkommt oder
-die Läufe nicht dieselben Folds gerechnet haben.
-
-### Kontextgröße
-
-`contexts` in der Config bestimmt, auf wie vielen der jüngsten Trainingszeilen ein
-Modell gefittet wird. `[null]` nutzt das ganze Fenster, eine Liste rechnet den
-Kontextsweep; die Referenzen bleiben dabei am vollen Fenster.
-
-```bash
-uv run python main.py --config configs/context_sweep.yaml
 ```
 
 ### Daten neu beschaffen
@@ -161,6 +123,9 @@ Der Ablauf steht vollständig in `main.py`. Jeder Schritt ist ein Modul.
 
 R1 greift auf 48 statt 24 Stunden zurück, weil ein Rückgriff auf den Vortag den
 Prognosezeitpunkt von 10:00 UTC überschreiten würde.
+
+`ridge` ist deterministisch und wird deshalb nur mit dem ersten Seed gerechnet; `seeds`
+wirkt auf die übrigen lernenden Modelle.
 
 ### Notebooks
 

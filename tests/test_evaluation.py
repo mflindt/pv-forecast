@@ -14,6 +14,7 @@ from pvforecast.evaluation import (
     daylight_mask,
     evaluate,
     point_metrics,
+    runtime,
     score,
     significance_test,
     stratify_all,
@@ -49,6 +50,19 @@ def test_point_metrics_rejects_an_empty_set():
 def test_daylight_mask_uses_the_astronomical_threshold():
     elevation = pd.Series([-10.0, 0.0, DAYLIGHT_ELEVATION_DEG, 30.0])
     assert daylight_mask(elevation).tolist() == [False, False, False, True]
+
+
+def test_runtime_counts_fits_not_forecast_hours(prediction_frame):
+    """Averaging over rows would weight a fit by the length of its test block."""
+    table = runtime(prediction_frame)
+    lgbm = table[table["model"] == "lightgbm"].iloc[0]
+
+    assert set(table["model"]) == {"R3_combined", "lightgbm"}
+    # Two folds, one seed: two fits, not 2 x 480 forecast hours.
+    assert lgbm["n_fits"] == 2
+    assert lgbm["fit_seconds"] == pytest.approx(3.2)
+    assert lgbm["fit_seconds_total"] == pytest.approx(6.4)
+    assert lgbm["predict_seconds"] == pytest.approx(0.05)
 
 
 def test_daylight_filter_changes_the_metric(prediction_frame):
@@ -165,7 +179,7 @@ def test_significance_test_stays_silent_without_a_difference(prediction_frame):
 def test_score_produces_every_table(prediction_frame, small_config):
     results = score(small_config, prediction_frame)
 
-    assert set(results) == {"metrics_fold", "metrics_agg", "strata", "tests"}
+    assert set(results) == {"metrics_fold", "metrics_agg", "strata", "runtime", "tests"}
     assert "skill" in results["metrics_agg"].columns
     assert "nmae_std" in results["metrics_agg"].columns
     # Best model first, so the head of the table is the headline result.

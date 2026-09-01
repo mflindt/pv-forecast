@@ -41,10 +41,9 @@ def joined_frame() -> pd.DataFrame:
     return make_joined_frame()
 
 
-@pytest.fixture(scope="session")
-def dataset(joined_frame) -> tuple[pd.DataFrame, pd.Series, pd.DataFrame]:
+def make_dataset(frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series, pd.DataFrame]:
     """Feature matrix, target and meta, built the way build_dataset builds them."""
-    X, y, meta = preprocessing.build_features(joined_frame)
+    X, y, meta = preprocessing.build_features(frame)
     X = pd.concat([X, preprocessing.lag_features(X["kt"], lags=(48,))], axis=1)
 
     # Drop the capacity warm-up so the matrix is complete, as in the real pipeline.
@@ -57,6 +56,17 @@ def dataset(joined_frame) -> tuple[pd.DataFrame, pd.Series, pd.DataFrame]:
     return X, y, meta
 
 
+@pytest.fixture(scope="session")
+def dataset(joined_frame) -> tuple[pd.DataFrame, pd.Series, pd.DataFrame]:
+    return make_dataset(joined_frame)
+
+
+@pytest.fixture(scope="session")
+def dataset_with_holdout() -> tuple[pd.DataFrame, pd.Series, pd.DataFrame]:
+    """A dataset that reaches into the hold-out year, for the confirmation run."""
+    return make_dataset(make_joined_frame(start="2023-01-01", end="2025-12-31 23:00"))
+
+
 @pytest.fixture
 def prediction_frame() -> pd.DataFrame:
     """A minimal frame that satisfies the long-format contract."""
@@ -65,7 +75,11 @@ def prediction_frame() -> pd.DataFrame:
     rng = np.random.default_rng(1)
 
     blocks = []
-    for name, error in (("R3_combined", 200.0), ("lightgbm", 60.0)):
+    # The third value is the cost of one fit; a cheap reference against a tuned model.
+    for name, error, fit_seconds in (
+        ("R3_combined", 200.0, 0.4),
+        ("lightgbm", 60.0, 3.2),
+    ):
         truth = np.clip(elevation, 0, None) * 100
         blocks.append(
             pd.DataFrame(
@@ -85,6 +99,8 @@ def prediction_frame() -> pd.DataFrame:
                     "cap_ac_mw": 7000.0,
                     "sun_elevation": elevation,
                     "kt": np.clip(rng.uniform(0, 1.2, len(index)), 0, None),
+                    "fit_seconds": fit_seconds,
+                    "predict_seconds": 0.05,
                 }
             )
         )

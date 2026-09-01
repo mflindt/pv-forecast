@@ -9,10 +9,13 @@ from pvforecast import preprocessing, training
 from pvforecast.evaluation import PREDICTION_COLUMNS, check_predictions
 from pvforecast.training import (
     HOLDOUT_START,
+    build_folds,
+    holdout_fold,
     information_set,
     inner_split,
     rolling_origin_days,
     sample_configs,
+    seeds_for,
 )
 
 
@@ -20,6 +23,15 @@ from pvforecast.training import (
 def folds(dataset):
     X, _, _ = dataset
     return rolling_origin_days(X.index, n_folds=3, test_days=40, gap_hours=48)
+
+
+@pytest.fixture(scope="session")
+def index_with_holdout(dataset):
+    """The feature index extended by the hold-out year."""
+    X, _, _ = dataset
+    return X.index.append(
+        pd.date_range("2025-01-01", "2025-12-31 23:00", freq="h", tz="UTC")
+    )
 
 
 def test_gap_between_train_and_test(folds):
@@ -45,6 +57,36 @@ def test_holdout_year_is_never_touched(dataset):
     for train, test in rolling_origin_days(index, n_folds=2, test_days=40):
         assert train.max() < HOLDOUT_START
         assert test.max() < HOLDOUT_START
+
+
+def test_holdout_fold_trains_only_before_the_hold_out(index_with_holdout):
+    """The one run on 2025 must not carry a single training hour out of that year."""
+    train, test = holdout_fold(index_with_holdout, gap_hours=48)
+
+    assert train.max() < HOLDOUT_START
+    assert test.min() >= HOLDOUT_START
+    assert test.min() - train.max() >= pd.Timedelta(hours=48)
+    assert train.intersection(test).empty
+    # The whole hold-out year is evaluated, not just its start.
+    assert test.max() == index_with_holdout.max()
+
+
+def test_build_folds_switches_between_the_two_layouts(index_with_holdout):
+    """Without the switch there is no way to score 2025; with it, only one fold."""
+    rolling = build_folds(index_with_holdout, n_folds=2, test_days=40)
+    single = build_folds(
+        index_with_holdout, holdout=True, n_folds=2, test_days=40, gap_hours=48
+    )
+
+    assert all(test.max() < HOLDOUT_START for _, test in rolling)
+    assert len(single) == 1
+    assert single[0][1].min() >= HOLDOUT_START
+
+
+def test_deterministic_model_is_fitted_once():
+    """Three identical ridge fits would report a seed spread that does not exist."""
+    assert seeds_for("ridge", [42, 43, 44]) == [42]
+    assert seeds_for("lightgbm", [42, 43, 44]) == [42, 43, 44]
 
 
 def test_expanding_grows_while_sliding_stays_constant(dataset):
@@ -121,6 +163,37 @@ def test_predictions_satisfy_the_long_format_contract(dataset, small_config):
     assert len(spans) == small_config["splits"]["n_folds"]
 
 
+def test_every_fit_records_what_it_cost(dataset, small_config):
+    """The runtime argument of the thesis needs one number per fit, not per hour."""
+    X, y, meta = dataset
+    predictions, hyperparams, _ = training.run_folds(
+        small_config, X, y, meta, pd.Series(dtype=float)
+    )
+
+    assert (predictions["fit_seconds"] > 0).all()
+    assert (predictions["predict_seconds"] > 0).all()
+    # One fit, one value: a value that varies within a block would be a row-wise clock.
+    per_fit = predictions.groupby(["model", "featureset", "fold", "seed"])
+    assert per_fit["fit_seconds"].nunique().eq(1).all()
+    assert all(entry["search_seconds"] > 0 for entry in hyperparams)
+
+
+def test_holdout_run_scores_the_hold_out_year_and_nothing_else(
+    dataset_with_holdout, small_config
+):
+    """The confirmation run happens exactly once; it must not fail on the day."""
+    X, y, meta = dataset_with_holdout
+    cfg = {**small_config, "splits": {"holdout": True, "gap_hours": 48}}
+
+    predictions, _, spans = training.run_folds(cfg, X, y, meta, pd.Series(dtype=float))
+    scored = pd.to_datetime(predictions["time"], utc=True)
+
+    assert len(spans) == 1
+    assert spans.loc[0, "train_end"] < HOLDOUT_START
+    assert (scored >= HOLDOUT_START).all()
+    assert scored.max() == X.index.max()
+
+
 def test_predictions_never_come_from_a_model_that_saw_the_test_fold(
     dataset, small_config
 ):
@@ -161,6 +234,7 @@ def test_pipeline_writes_every_artefact_including_figures(
         "metrics_agg.csv",
         "metrics_fold.csv",
         "strata.csv",
+        "runtime.csv",
         "tests.csv",
         "folds.csv",
         "hyperparams.json",
