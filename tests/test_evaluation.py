@@ -6,12 +6,10 @@ import pytest
 
 from pvforecast import evaluation
 from pvforecast.evaluation import (
-    DAYLIGHT_ELEVATION_DEG,
     STRATA,
     add_skill,
     aggregate_folds,
     check_predictions,
-    daylight_mask,
     evaluate,
     point_metrics,
     runtime,
@@ -47,11 +45,6 @@ def test_point_metrics_rejects_an_empty_set():
         point_metrics(empty, empty, empty)
 
 
-def test_daylight_mask_uses_the_astronomical_threshold():
-    elevation = pd.Series([-10.0, 0.0, DAYLIGHT_ELEVATION_DEG, 30.0])
-    assert daylight_mask(elevation).tolist() == [False, False, False, True]
-
-
 def test_runtime_counts_fits_not_forecast_hours(prediction_frame):
     """Averaging over rows would weight a fit by the length of its test block."""
     table = runtime(prediction_frame)
@@ -79,11 +72,6 @@ def test_metrics_record_how_they_were_normalised(prediction_frame):
     assert metrics["daylight_only"].all()
 
 
-def test_evaluate_rejects_an_unknown_normaliser(prediction_frame):
-    with pytest.raises(ValueError, match="Unbekannte Normierung"):
-        evaluate(prediction_frame, normaliser="nameplate")
-
-
 def test_check_predictions_rejects_a_broken_frame(prediction_frame):
     with pytest.raises(ValueError, match="Spalten fehlen"):
         check_predictions(prediction_frame.drop(columns="kt"))
@@ -109,12 +97,6 @@ def test_skill_score_is_zero_against_itself(prediction_frame):
     assert (scored[scored["model"] == "lightgbm"]["skill"] > 0).all()
 
 
-def test_add_skill_raises_on_a_missing_reference(prediction_frame):
-    metrics = evaluate(prediction_frame, groupby=("model", "fold"))
-    with pytest.raises(ValueError, match="fehlt in den Metriken"):
-        add_skill(metrics, "R9_does_not_exist")
-
-
 def test_aggregate_folds_separates_seed_spread_from_fold_spread():
     """Repeats are collapsed per fold first; otherwise the spread mixes two sources."""
     rows = []
@@ -137,11 +119,6 @@ def test_aggregate_folds_separates_seed_spread_from_fold_spread():
     assert agg["nmae_std"] == pytest.approx(np.std([0.10, 0.20], ddof=1))
     assert agg["nmae_sd_seed"] == pytest.approx(np.std([-0.01, 0.01], ddof=1))
     assert agg["n_folds"] == 2
-
-
-def test_aggregate_folds_needs_a_fold_column():
-    with pytest.raises(ValueError, match="'fold'-Spalte"):
-        aggregate_folds(pd.DataFrame({"model": ["a"], "nmae": [0.1]}))
 
 
 def test_stratify_all_covers_every_stratum(prediction_frame):

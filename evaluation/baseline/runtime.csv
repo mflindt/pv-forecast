@@ -1,0 +1,8 @@
+model,featureset,context_rows,n_fits,fit_seconds,fit_seconds_total,predict_seconds
+lightgbm,S3,0,36,6.41,230.7595,0.0297
+ridge,S3,0,12,0.013,0.1564,0.0012
+R3_combined,-,0,12,0.0118,0.141,0.0013
+R0_climatology,-,0,12,0.0068,0.0812,0.0012
+R2_clearsky_persistence,-,0,12,0.0008,0.01,0.0005
+R1_persistence,-,0,12,0.0,0.0001,0.0004
+R4_tso_dayahead,-,0,12,0.0,0.0,0.0

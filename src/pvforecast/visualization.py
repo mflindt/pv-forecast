@@ -71,6 +71,12 @@ MONTHS = (
 REFERENCE_FEATURESET = "-"
 TSO_MODEL = "R4_tso_dayahead"
 
+# Lags of the daily-loss autocorrelation; the GW test corrects for exactly this.
+ACF_LAGS = 30
+
+# training.FULL_CONTEXT: the whole window, recorded as 0 because it varies per fold.
+FULL_CONTEXT = 0
+
 
 def label(name: str) -> str:
     """Readable model name."""
@@ -735,8 +741,10 @@ def plot_bias(
 
 def largest_context(frame: pd.DataFrame) -> pd.DataFrame:
     """Keep one series per model: the one fitted on the largest context."""
-    largest = frame.groupby("model", observed=True)["context_rows"].transform("max")
-    return frame[frame["context_rows"] == largest]
+    # 0 encodes the whole training window, which outranks every explicit size.
+    size = frame["context_rows"].replace(FULL_CONTEXT, np.inf)
+    largest = size.groupby(frame["model"], observed=True).transform("max")
+    return frame[size == largest]
 
 
 def plot_context_curve(pooled: pd.DataFrame, out_dir: Path) -> Path:
@@ -748,14 +756,33 @@ def plot_context_curve(pooled: pd.DataFrame, out_dir: Path) -> Path:
         raise ValueError("Kontextkurve braucht mindestens zwei Kontextgrößen")
 
     order = [m for m in model_order(pooled) if m in set(block["model"])]
-    styles = series_styles(order, order[:3])
+    styles = series_styles(model_order(pooled), order[:3])
 
     fig, ax = plt.subplots(figsize=(7.2, 4.2))
     for name in order:
         rows = block[block["model"] == name].sort_values("context_rows")
         ax.plot(rows["context_rows"], rows["nmae"], label=label(name), **styles[name])
 
-    # The reference stays at the full window, so it is a horizontal guide.
+    # The full window has no single size, so it enters as a horizontal guide.
+    full = pooled[
+        (pooled["featureset"] != REFERENCE_FEATURESET)
+        & (pooled["context_rows"] == FULL_CONTEXT)
+    ]
+    # Labelled on the left, where the curves run high and leave the lines room.
+    for i, (_, row) in enumerate(full.sort_values("nmae").iterrows()):
+        style = styles.get(row["model"], {"color": CONTEXT})
+        ax.axhline(row["nmae"], color=style["color"], linestyle=":", linewidth=1.4)
+        ax.annotate(
+            f"{label(row['model'])}, voller Kontext",
+            (block["context_rows"].min(), row["nmae"]),
+            textcoords="offset points",
+            xytext=(2, -11 if i % 2 == 0 else 5),
+            ha="left",
+            fontsize=8,
+            color=style["color"],
+        )
+
+    # The reference stays at the full window, so it is a horizontal guide too.
     reference = pooled[pooled["featureset"] == REFERENCE_FEATURESET].sort_values("nmae")
     if not reference.empty:
         best = reference.iloc[0]
@@ -786,6 +813,270 @@ def plot_context_curve(pooled: pd.DataFrame, out_dir: Path) -> Path:
 
     _note(ax, "Mittel über alle Folds, Tagstunden.", inches=1.02)
     return _save(fig, out_dir, "08_kontextkurve.png")
+
+
+def _model_rows(predictions: pd.DataFrame, model: str, cfg: dict) -> pd.DataFrame:
+    """Daylight rows of one model"""
+    rows = predictions[predictions["model"] == model]
+    rows = rows[rows["seed"] == rows["seed"].min()]
+    if cfg["evaluation"]["daylight_only"]:
+        rows = rows[daylight_mask(rows["sun_elevation"])]
+    if rows.empty:
+        raise ValueError(f"Keine auswertbaren Zeilen für {model}")
+
+    capacity = rows[NORMALISERS[cfg["evaluation"]["normaliser"]]]
+    return rows.assign(
+        residual=(rows["y_pred_mwh"] - rows["y_true_mwh"]) / capacity,
+        time_utc=pd.to_datetime(rows["time"], utc=True),
+    )
+
+
+def plot_scatter(rows: pd.DataFrame, model: str, out_dir: Path) -> Path:
+    """Forecast against observation"""
+    truth = rows["y_true_mwh"].to_numpy() / 1000
+    pred = rows["y_pred_mwh"].to_numpy() / 1000
+    high = float(max(truth.max(), pred.max())) * 1.03
+
+    fig, ax = plt.subplots(figsize=(6.6, 6.2))
+    mesh = ax.hexbin(truth, pred, gridsize=60, bins="log", mincnt=1, cmap="Blues")
+    ax.plot([0, high], [0, high], color=INK_SOFT, linestyle="--", linewidth=1.2)
+
+    slope, intercept = np.polyfit(truth, pred, 1)
+    ax.plot(
+        [0, high],
+        [intercept, intercept + slope * high],
+        color=ACCENTS[1],
+        linewidth=1.8,
+        label=f"Regression: {slope:.3f}x {intercept:+.3f}",
+    )
+
+    r2 = float(np.corrcoef(truth, pred)[0, 1] ** 2)
+    residual = rows["residual"]
+    ax.text(
+        0.04,
+        0.96,
+        "\n".join(
+            [
+                f"n = {len(rows):,}".replace(",", "."),
+                f"R² = {r2:.3f}",
+                f"Steigung = {slope:.3f}",
+                f"nMAE = {residual.abs().mean():.4f}",
+                f"nMBE = {residual.mean():+.4f}",
+            ]
+        ),
+        transform=ax.transAxes,
+        va="top",
+        ha="left",
+        fontsize=9,
+        color=INK,
+    )
+
+    ax.set_xlim(0, high)
+    ax.set_ylim(0, high)
+    ax.set_aspect("equal")
+    ax.set_xlabel("Ist-Einspeisung (GWh/h)")
+    ax.set_ylabel("Prognose (GWh/h)")
+    ax.set_title(f"Prognose gegen Ist — {label(model)}")
+    ax.grid(alpha=0.6)
+    ax.set_axisbelow(True)
+    ax.legend(loc="lower right", frameon=False)
+
+    bar = fig.colorbar(mesh, ax=ax, pad=0.02, fraction=0.045)
+    bar.set_label("Stunden je Zelle (log)", fontsize=9, color=INK_SOFT)
+    bar.outline.set_visible(False)
+    bar.ax.tick_params(length=0, labelsize=8)
+
+    _note(ax, "Tagstunden aller Test-Folds, gestrichelt die Winkelhalbierende.", 0.62)
+    return _save(fig, out_dir, "01_streuung.png")
+
+
+def plot_residuals(rows: pd.DataFrame, model: str, out_dir: Path) -> Path:
+    """Shape of the error distribution and how long an error persists."""
+    residual = rows["residual"].to_numpy()
+    fig, (ax_hist, ax_acf) = plt.subplots(1, 2, figsize=(12, 4.6))
+
+    ax_hist.hist(residual, bins=80, color=ACCENTS[0], alpha=0.75)
+    ax_hist.axvline(0.0, color=INK_SOFT, lw=1.0)
+    ax_hist.axvline(
+        residual.mean(),
+        color=ACCENTS[1],
+        lw=1.6,
+        label=f"Mittel {residual.mean():+.4f}",
+    )
+    ax_hist.set_xlabel("normiertes Residuum (Prognose − Ist)")
+    ax_hist.set_ylabel("Stunden")
+    ax_hist.set_title("Verteilung der Residuen")
+    ax_hist.legend(loc="upper right", frameon=False)
+    ax_hist.grid(alpha=0.6)
+    ax_hist.set_axisbelow(True)
+
+    spread = residual.std(ddof=0)
+    # Fisher-Pearson skew: a long tail on one side means asymmetric over/under-forecast.
+    skew = float(((residual - residual.mean()) ** 3).mean() / spread**3)
+    ax_hist.text(
+        0.03,
+        0.96,
+        f"sd = {spread:.4f}\nSchiefe = {skew:+.2f}",
+        transform=ax_hist.transAxes,
+        va="top",
+        fontsize=9,
+        color=INK_SOFT,
+    )
+
+    loss = (
+        rows.assign(day=rows["time_utc"].dt.floor("D"))
+        .groupby("day")["residual"]
+        .apply(lambda block: block.abs().mean())
+        .sort_index()
+    )
+    centred = loss.to_numpy() - loss.to_numpy().mean()
+    denominator = float((centred**2).sum())
+    acf = [
+        float((centred[lag:] * centred[:-lag]).sum() / denominator)
+        for lag in range(1, ACF_LAGS + 1)
+    ]
+    band = 1.96 / np.sqrt(len(loss))
+
+    ax_acf.bar(range(1, ACF_LAGS + 1), acf, color=ACCENTS[0], width=0.7)
+    ax_acf.axhline(0.0, color=INK_SOFT, lw=1.0)
+    for sign in (1, -1):
+        ax_acf.axhline(sign * band, color=CONTEXT_SOFT, lw=1.0, linestyle="--")
+    ax_acf.set_xlabel("Verzögerung (Tage)")
+    ax_acf.set_ylabel("Autokorrelation")
+    ax_acf.set_title("Autokorrelation des Tagesfehlers")
+    ax_acf.grid(alpha=0.6)
+    ax_acf.set_axisbelow(True)
+
+    fig.suptitle(f"Residuen — {label(model)}", y=1.02, fontsize=13, color=INK)
+    fig.tight_layout()
+    return _save(fig, out_dir, "02_residuen.png")
+
+
+def plot_error_grid(rows: pd.DataFrame, model: str, out_dir: Path) -> Path:
+    """Where in the year and the day the model fails, and in which direction."""
+    grid = rows.assign(
+        month=rows["time_utc"].dt.month, hour=rows["time_utc"].dt.hour
+    ).groupby(["month", "hour"])["residual"]
+    absolute = grid.apply(lambda block: block.abs().mean()).unstack("hour")
+    bias = grid.mean().unstack("hour")
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 4.8))
+    limit = float(np.nanmax(np.abs(bias.to_numpy())))
+    panels = (
+        (axes[0], absolute, "Blues", None, "nMAE", "Fehler"),
+        (axes[1], bias, "RdBu_r", limit, "nMBE (positiv = Überschätzung)", "Bias"),
+    )
+
+    for ax, frame, cmap, limit_value, bar_label, title in panels:
+        kwargs = {"vmin": -limit_value, "vmax": limit_value} if limit_value else {}
+        mesh = ax.pcolormesh(
+            frame.columns, frame.index, frame.to_numpy(), cmap=cmap, **kwargs
+        )
+        ax.set_xlabel("Stunde (UTC)")
+        ax.set_ylabel("Monat")
+        ax.set_yticks(range(1, 13))
+        ax.set_yticklabels(MONTHS)
+        ax.invert_yaxis()
+        ax.set_title(title)
+        ax.grid(False)
+
+        bar = fig.colorbar(mesh, ax=ax, pad=0.02, fraction=0.045)
+        bar.set_label(bar_label, fontsize=9, color=INK_SOFT)
+        bar.outline.set_visible(False)
+        bar.ax.tick_params(length=0, labelsize=8)
+
+    fig.suptitle(
+        f"Fehler nach Monat und Stunde — {label(model)}",
+        y=1.02,
+        fontsize=13,
+        color=INK,
+    )
+    fig.tight_layout()
+    return _save(fig, out_dir, "03_fehler_heatmap.png")
+
+
+def plot_best_worst_days(rows: pd.DataFrame, model: str, out_dir: Path) -> Path:
+    """The models own best and worst test day, side by side."""
+    day = rows["time_utc"].dt.floor("D")
+    loss = (
+        rows.assign(day=day)
+        .groupby("day")["residual"]
+        .apply(lambda block: block.abs().mean())
+    )
+    chosen = ((loss.idxmin(), "bester Tag"), (loss.idxmax(), "schlechtester Tag"))
+
+    fig, axes = plt.subplots(1, 2, figsize=(13, 4.6), sharey=False)
+    for ax, (date, title) in zip(axes, chosen, strict=True):
+        block = rows[day == date].sort_values("time_utc")
+        hours = block["time_utc"].dt.hour
+
+        ax.fill_between(
+            hours,
+            block["y_true_mwh"] / 1000,
+            color=INK,
+            alpha=0.12,
+            label="Ist-Einspeisung",
+        )
+        ax.plot(
+            hours,
+            block["y_pred_mwh"] / 1000,
+            color=ACCENTS[0],
+            marker="o",
+            markersize=4,
+            label="Prognose",
+        )
+        ax.set_title(f"{date:%d.%m.%Y}, {title} (nMAE {loss[date]:.4f})")
+        ax.set_xlabel("Stunde (UTC)")
+        ax.set_ylabel("Einspeisung (GWh/h)")
+        ax.grid(alpha=0.6)
+        ax.set_axisbelow(True)
+
+    axes[0].legend(loc="upper left", frameon=False)
+    fig.suptitle(
+        f"Beste und schlechteste Prognose — {label(model)}",
+        y=1.02,
+        fontsize=13,
+        color=INK,
+    )
+    fig.tight_layout()
+    return _save(fig, out_dir, "04_beste_schlechteste_tage.png")
+
+
+def make_per_model(
+    out_dir: Path,
+    cfg: dict,
+    predictions: pd.DataFrame,
+    results: dict[str, pd.DataFrame],
+) -> list[Path]:
+    """Write the diagnostic figures of every single model under <run>/models."""
+    _style()
+    pooled = results["metrics_agg"]
+    if pooled["context_rows"].nunique() > 1:
+        predictions = largest_context(predictions)
+        pooled = largest_context(pooled)
+
+    written: list[Path] = []
+    for model in model_order(pooled):
+        folder = Path(out_dir) / "models" / model
+        try:
+            rows = _model_rows(predictions, model, cfg)
+        except Exception as error:
+            logger.warning(f"Modell {model} übersprungen: {error}")
+            continue
+
+        for name, job in (
+            ("01_streuung", plot_scatter),
+            ("02_residuen", plot_residuals),
+            ("03_fehler_heatmap", plot_error_grid),
+            ("04_beste_schlechteste_tage", plot_best_worst_days),
+        ):
+            try:
+                written.append(job(rows, model, folder))
+            except Exception as error:
+                logger.warning(f"Abbildung {name} für {model} übersprungen: {error}")
+
+    logger.info(f"{len(written)} Modellabbildungen unter {Path(out_dir) / 'models'}")
+    return written
 
 
 def make_all(

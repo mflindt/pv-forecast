@@ -1,0 +1,386 @@
+[
+  {
+    "model": "ridge",
+    "featureset": "S3",
+    "fold": 1,
+    "context_rows": 0,
+    "fit_rows": 52944,
+    "params": {
+      "alpha": 0.001
+    },
+    "inner_nmae": 0.03864957757824361,
+    "n_configs": 10,
+    "search_seconds": 0.145
+  },
+  {
+    "model": "lightgbm",
+    "featureset": "S3",
+    "fold": 1,
+    "context_rows": 0,
+    "fit_rows": 52944,
+    "params": {
+      "learning_rate": 0.05,
+      "num_leaves": 127,
+      "min_child_samples": 200,
+      "colsample_bytree": 0.6,
+      "subsample": 0.8,
+      "reg_lambda": 0.1,
+      "n_estimators": 264
+    },
+    "inner_nmae": 0.029751998971893266,
+    "n_configs": 40,
+    "search_seconds": 398.468
+  },
+  {
+    "model": "ridge",
+    "featureset": "S3",
+    "fold": 2,
+    "context_rows": 0,
+    "fit_rows": 55104,
+    "params": {
+      "alpha": 46.41588833612782
+    },
+    "inner_nmae": 0.05931673551223819,
+    "n_configs": 10,
+    "search_seconds": 0.133
+  },
+  {
+    "model": "lightgbm",
+    "featureset": "S3",
+    "fold": 2,
+    "context_rows": 0,
+    "fit_rows": 55104,
+    "params": {
+      "learning_rate": 0.1,
+      "num_leaves": 63,
+      "min_child_samples": 100,
+      "colsample_bytree": 0.8,
+      "subsample": 0.6,
+      "reg_lambda": 10.0,
+      "n_estimators": 173
+    },
+    "inner_nmae": 0.03668928987149709,
+    "n_configs": 40,
+    "search_seconds": 289.173
+  },
+  {
+    "model": "ridge",
+    "featureset": "S3",
+    "fold": 3,
+    "context_rows": 0,
+    "fit_rows": 57264,
+    "params": {
+      "alpha": 1.291549665014884
+    },
+    "inner_nmae": 0.04716541860298687,
+    "n_configs": 10,
+    "search_seconds": 0.138
+  },
+  {
+    "model": "lightgbm",
+    "featureset": "S3",
+    "fold": 3,
+    "context_rows": 0,
+    "fit_rows": 57264,
+    "params": {
+      "learning_rate": 0.02,
+      "num_leaves": 127,
+      "min_child_samples": 100,
+      "colsample_bytree": 0.8,
+      "subsample": 0.6,
+      "reg_lambda": 1.0,
+      "n_estimators": 418
+    },
+    "inner_nmae": 0.04005614449285394,
+    "n_configs": 40,
+    "search_seconds": 340.08
+  },
+  {
+    "model": "ridge",
+    "featureset": "S3",
+    "fold": 4,
+    "context_rows": 0,
+    "fit_rows": 59424,
+    "params": {
+      "alpha": 0.001
+    },
+    "inner_nmae": 0.047776719999242157,
+    "n_configs": 10,
+    "search_seconds": 0.169
+  },
+  {
+    "model": "lightgbm",
+    "featureset": "S3",
+    "fold": 4,
+    "context_rows": 0,
+    "fit_rows": 59424,
+    "params": {
+      "learning_rate": 0.05,
+      "num_leaves": 127,
+      "min_child_samples": 200,
+      "colsample_bytree": 0.8,
+      "subsample": 0.6,
+      "reg_lambda": 10.0,
+      "n_estimators": 441
+    },
+    "inner_nmae": 0.03425654533992626,
+    "n_configs": 40,
+    "search_seconds": 450.115
+  },
+  {
+    "model": "ridge",
+    "featureset": "S3",
+    "fold": 5,
+    "context_rows": 0,
+    "fit_rows": 61584,
+    "params": {
+      "alpha": 46.41588833612782
+    },
+    "inner_nmae": 0.040200508718921724,
+    "n_configs": 10,
+    "search_seconds": 0.142
+  },
+  {
+    "model": "lightgbm",
+    "featureset": "S3",
+    "fold": 5,
+    "context_rows": 0,
+    "fit_rows": 61584,
+    "params": {
+      "learning_rate": 0.02,
+      "num_leaves": 31,
+      "min_child_samples": 200,
+      "colsample_bytree": 1.0,
+      "subsample": 0.6,
+      "reg_lambda": 10.0,
+      "n_estimators": 441
+    },
+    "inner_nmae": 0.0288652179721037,
+    "n_configs": 40,
+    "search_seconds": 281.494
+  },
+  {
+    "model": "ridge",
+    "featureset": "S3",
+    "fold": 6,
+    "context_rows": 0,
+    "fit_rows": 63744,
+    "params": {
+      "alpha": 7.742636826811269
+    },
+    "inner_nmae": 0.05095585323961397,
+    "n_configs": 10,
+    "search_seconds": 0.161
+  },
+  {
+    "model": "lightgbm",
+    "featureset": "S3",
+    "fold": 6,
+    "context_rows": 0,
+    "fit_rows": 63744,
+    "params": {
+      "learning_rate": 0.02,
+      "num_leaves": 63,
+      "min_child_samples": 200,
+      "colsample_bytree": 0.6,
+      "subsample": 0.6,
+      "reg_lambda": 0.1,
+      "n_estimators": 699
+    },
+    "inner_nmae": 0.03643094079079888,
+    "n_configs": 40,
+    "search_seconds": 384.263
+  },
+  {
+    "model": "ridge",
+    "featureset": "S3",
+    "fold": 7,
+    "context_rows": 0,
+    "fit_rows": 65904,
+    "params": {
+      "alpha": 7.742636826811269
+    },
+    "inner_nmae": 0.048736010504837904,
+    "n_configs": 10,
+    "search_seconds": 0.194
+  },
+  {
+    "model": "lightgbm",
+    "featureset": "S3",
+    "fold": 7,
+    "context_rows": 0,
+    "fit_rows": 65904,
+    "params": {
+      "learning_rate": 0.05,
+      "num_leaves": 31,
+      "min_child_samples": 20,
+      "colsample_bytree": 1.0,
+      "subsample": 0.8,
+      "reg_lambda": 10.0,
+      "n_estimators": 592
+    },
+    "inner_nmae": 0.03493673902760735,
+    "n_configs": 40,
+    "search_seconds": 377.463
+  },
+  {
+    "model": "ridge",
+    "featureset": "S3",
+    "fold": 8,
+    "context_rows": 0,
+    "fit_rows": 68064,
+    "params": {
+      "alpha": 278.2559402207126
+    },
+    "inner_nmae": 0.04630909685306582,
+    "n_configs": 10,
+    "search_seconds": 0.162
+  },
+  {
+    "model": "lightgbm",
+    "featureset": "S3",
+    "fold": 8,
+    "context_rows": 0,
+    "fit_rows": 68064,
+    "params": {
+      "learning_rate": 0.01,
+      "num_leaves": 127,
+      "min_child_samples": 100,
+      "colsample_bytree": 0.8,
+      "subsample": 0.8,
+      "reg_lambda": 1.0,
+      "n_estimators": 1106
+    },
+    "inner_nmae": 0.03294560280201037,
+    "n_configs": 40,
+    "search_seconds": 448.189
+  },
+  {
+    "model": "ridge",
+    "featureset": "S3",
+    "fold": 9,
+    "context_rows": 0,
+    "fit_rows": 70224,
+    "params": {
+      "alpha": 278.2559402207126
+    },
+    "inner_nmae": 0.03285655874184226,
+    "n_configs": 10,
+    "search_seconds": 0.144
+  },
+  {
+    "model": "lightgbm",
+    "featureset": "S3",
+    "fold": 9,
+    "context_rows": 0,
+    "fit_rows": 70224,
+    "params": {
+      "learning_rate": 0.1,
+      "num_leaves": 15,
+      "min_child_samples": 200,
+      "colsample_bytree": 1.0,
+      "subsample": 1.0,
+      "reg_lambda": 1.0,
+      "n_estimators": 311
+    },
+    "inner_nmae": 0.02548580268065074,
+    "n_configs": 40,
+    "search_seconds": 466.444
+  },
+  {
+    "model": "ridge",
+    "featureset": "S3",
+    "fold": 10,
+    "context_rows": 0,
+    "fit_rows": 72384,
+    "params": {
+      "alpha": 1668.100537200059
+    },
+    "inner_nmae": 0.05757112510999556,
+    "n_configs": 10,
+    "search_seconds": 0.178
+  },
+  {
+    "model": "lightgbm",
+    "featureset": "S3",
+    "fold": 10,
+    "context_rows": 0,
+    "fit_rows": 72384,
+    "params": {
+      "learning_rate": 0.1,
+      "num_leaves": 15,
+      "min_child_samples": 50,
+      "colsample_bytree": 1.0,
+      "subsample": 0.8,
+      "reg_lambda": 0.1,
+      "n_estimators": 374
+    },
+    "inner_nmae": 0.044776724096115925,
+    "n_configs": 40,
+    "search_seconds": 484.84
+  },
+  {
+    "model": "ridge",
+    "featureset": "S3",
+    "fold": 11,
+    "context_rows": 0,
+    "fit_rows": 74544,
+    "params": {
+      "alpha": 278.2559402207126
+    },
+    "inner_nmae": 0.056926638440123425,
+    "n_configs": 10,
+    "search_seconds": 0.16
+  },
+  {
+    "model": "lightgbm",
+    "featureset": "S3",
+    "fold": 11,
+    "context_rows": 0,
+    "fit_rows": 74544,
+    "params": {
+      "learning_rate": 0.1,
+      "num_leaves": 15,
+      "min_child_samples": 200,
+      "colsample_bytree": 1.0,
+      "subsample": 1.0,
+      "reg_lambda": 1.0,
+      "n_estimators": 221
+    },
+    "inner_nmae": 0.05285110427590315,
+    "n_configs": 40,
+    "search_seconds": 341.435
+  },
+  {
+    "model": "ridge",
+    "featureset": "S3",
+    "fold": 12,
+    "context_rows": 0,
+    "fit_rows": 76704,
+    "params": {
+      "alpha": 46.41588833612782
+    },
+    "inner_nmae": 0.04582210293325478,
+    "n_configs": 10,
+    "search_seconds": 0.16
+  },
+  {
+    "model": "lightgbm",
+    "featureset": "S3",
+    "fold": 12,
+    "context_rows": 0,
+    "fit_rows": 76704,
+    "params": {
+      "learning_rate": 0.02,
+      "num_leaves": 15,
+      "min_child_samples": 20,
+      "colsample_bytree": 0.6,
+      "subsample": 1.0,
+      "reg_lambda": 1.0,
+      "n_estimators": 390
+    },
+    "inner_nmae": 0.04511185525569899,
+    "n_configs": 40,
+    "search_seconds": 256.262
+  }
+]

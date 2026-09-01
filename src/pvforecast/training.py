@@ -195,6 +195,12 @@ def limit_context(
     if context_rows is not None:
         if context_rows < 1:
             raise ValueError(f"context_rows muss >= 1 sein, ist {context_rows}")
+        # Silently taking fewer rows would label a smaller fit with the larger size.
+        if len(index) < context_rows:
+            raise ValueError(
+                f"Kontext {context_rows} verlangt mehr als die {len(index)} Zeilen "
+                "des Fensters"
+            )
         index = index[-context_rows:]
     if index.empty:
         raise ValueError("Kontextfenster ist nach der Einschränkung leer")

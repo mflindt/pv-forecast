@@ -1,7 +1,6 @@
 """Project paths, constants, and run configuration."""
 
 import logging
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pandas as pd
@@ -16,13 +15,12 @@ RAW_DIR = DATA_DIR / "raw"
 INTERIM_DIR = DATA_DIR / "interim"
 PROCESSED_DIR = DATA_DIR / "processed"
 
-REPORTS_DIR = PROJECT_ROOT / "reports"
+EVALUATION_DIR = PROJECT_ROOT / "evaluation"
 # Figures from the notebooks
-FIGURES_DIR = REPORTS_DIR / "eda"
+FIGURES_DIR = EVALUATION_DIR / "eda"
 
 CONFIG_DIR = PROJECT_ROOT / "configs"
 DEFAULT_CONFIG = CONFIG_DIR / "config.yaml"
-LOG_DIR = PROJECT_ROOT / "logs"
 
 # Raw files written by ingest.py
 PV_RAW = RAW_DIR / "smard_pv_realized_quarterhour_2015-2026.csv"
@@ -63,30 +61,39 @@ PERIOD_END = "2025-12-31 23:00"
 HOLDOUT_START = pd.Timestamp("2025-01-01", tz="UTC")
 
 
-def load_config(path: Path | str = DEFAULT_CONFIG) -> dict:
-    """Read a run configuration."""
-    path = Path(path).resolve()
+def resolve_config(path: Path | str) -> Path:
+    """Accept a path or the bare name of a file in configs/."""
+    path = Path(path)
+    if not path.is_file() and not path.suffix:
+        path = CONFIG_DIR / f"{path.name}.yaml"
     if not path.is_file():
         raise FileNotFoundError(f"Config nicht gefunden: {path}")
+    return path.resolve()
 
+
+def load_config(path: Path | str = DEFAULT_CONFIG) -> dict:
+    """Read a run configuration; `extends` fills in the keys it does not override."""
+    path = resolve_config(path)
     cfg = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    parent = cfg.pop("extends", None)
+    if parent is not None:
+        cfg = {**load_config(CONFIG_DIR / parent), **cfg}
+
     logger.info(f"Config: {path.name}")
     return cfg
 
 
-def setup_logging(name: str = "pvforecast", level: int = logging.INFO) -> Path:
-    """Log to the console and to one timestamped file per run under logs/."""
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
-    log_file = LOG_DIR / f"{name}_{datetime.now(UTC):%Y-%m-%d_%H%M%S}.log"
+def setup_logging(log_file: Path | None = None, level: int = logging.INFO) -> None:
+    """Log to the console, and to a file once the run has a directory."""
+    handlers: list[logging.Handler] = [logging.StreamHandler()]
+    if log_file is not None:
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        handlers.append(logging.FileHandler(log_file, mode="w", encoding="utf-8"))
 
     logging.basicConfig(
         level=level,
         format="%(asctime)s %(levelname)-7s %(name)s | %(message)s",
-        handlers=[
-            logging.StreamHandler(),
-            logging.FileHandler(log_file, encoding="utf-8"),
-        ],
+        handlers=handlers,
         force=True,
     )
     logging.getLogger("urllib3").setLevel(logging.WARNING)
-    return log_file

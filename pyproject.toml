@@ -2,29 +2,29 @@
 name = "pv-forecast"
 version = "0.2.0"
 description = "Day-ahead-PV-Prognose für Deutschland"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.13"
 dependencies = [
-    "lightgbm>=4.6.0",
-    "matplotlib>=3.11.0",
-    "notebook>=7.5.7",
-    "numpy>=2.4.6",
-    "pandas>=3.0.3",
-    "pvlib>=0.15.1",
-    "pyarrow>=24.0.0",
-    "pyyaml>=6.0.3",
-    "requests>=2.34.2",
-    "scikit-learn>=1.9.0",
+    "lightgbm>=4.5",
+    "matplotlib>=3.10",
+    "numpy>=2.0",
+    "pandas>=2.2",
+    "pvlib>=0.11",
+    "pyarrow>=15.0",
+    "pyyaml>=6.0",
+    "requests>=2.32",
+    "scikit-learn>=1.5",
 ]
 
 [project.optional-dependencies]
-gpu = ["tabpfn>=3.0.0"]
+gpu = ["tabpfn>=8.0,<9"]
 
 [dependency-groups]
 dev = [
-    "ipykernel>=7.3.0",
-    "pre-commit>=4.6.0",
-    "pytest>=9.0.3",
-    "ruff>=0.15.17",
+    "ipykernel>=6.29",
+    "notebook>=7.2",
+    "pre-commit>=4.0",
+    "pytest>=8.3",
+    "ruff>=0.7",
 ]
 
 [build-system]

@@ -4,6 +4,7 @@ import argparse
 import json
 import logging
 import platform
+import shutil
 import subprocess
 from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
@@ -19,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 # Keys a run configuration has to carry.
 REQUIRED_KEYS = (
+    "name",
     "seed",
     "seeds",
     "splits",
@@ -28,7 +30,6 @@ REQUIRED_KEYS = (
     "featuresets",
     "references",
     "include_tso",
-    "output_dir",
 )
 
 # Packages whose version changes a result; recorded with every run.
@@ -44,11 +45,17 @@ TRACKED_PACKAGES = (
 # Date columns of folds.csv; unparsed they break the split figure.
 FOLD_DATES = ["train_start", "train_end", "test_start", "test_end"]
 
+# Tables split into a folder per model, so one model can be read on its own.
+PER_MODEL_TABLES = ("metrics_agg", "metrics_fold", "strata")
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Experimentlauf aus einer Config")
     parser.add_argument(
-        "--config", type=Path, default=DEFAULT_CONFIG, help="Pfad zur Config"
+        "--config",
+        default=DEFAULT_CONFIG,
+        # A bare name resolves to configs/<name>.yaml.
+        help="Config: Pfad oder Name unter configs/",
     )
     parser.add_argument(
         "--stage",
@@ -61,7 +68,7 @@ def parse_args() -> argparse.Namespace:
         "--runs",
         nargs="+",
         default=None,
-        help="Auszuwertende Laufordner unter reports/ (nur mit --stage evaluate)",
+        help="Auszuwertende Läufe unter evaluation/ (nur mit --stage evaluate)",
     )
     parser.add_argument(
         "--folds",
@@ -69,6 +76,11 @@ def parse_args() -> argparse.Namespace:
         default=None,
         # Shortens the run without moving the fold boundaries: a smoke test.
         help="Probelauf: nur die ersten N Folds rechnen",
+    )
+    parser.add_argument(
+        "--force-data",
+        action="store_true",
+        help="data/interim und data/processed neu bauen, auch wenn sie aktuell sind",
     )
     return parser.parse_args()
 
@@ -78,6 +90,8 @@ def validate(cfg: dict) -> dict:
     missing = [key for key in REQUIRED_KEYS if key not in cfg]
     if missing:
         raise ValueError(f"Config-Schlüssel fehlen: {missing}")
+    if Path(cfg["name"]).name != cfg["name"] or cfg["name"] in ("", ".", ".."):
+        raise ValueError(f"name ist kein einfacher Ordnername: {cfg['name']!r}")
 
     for name in cfg["models"]:
         models.spec(name)
@@ -123,16 +137,9 @@ def git_commit() -> str:
         return "unbekannt"
 
 
-def make_run_dir(cfg: dict) -> Path:
-    """Timestamped directory for this run; 'latest' is repointed to it."""
-    parent = PROJECT_ROOT / cfg["output_dir"]
-    out = parent / f"{datetime.now(UTC):%Y-%m-%d_%H%M%S}"
-    out.mkdir(parents=True, exist_ok=True)
-
-    latest = parent / "latest"
-    latest.unlink(missing_ok=True)
-    latest.symlink_to(out.name)
-    return out
+def run_dir(cfg: dict) -> Path:
+    """Where a run writes: one named folder per experiment, rerun in place."""
+    return PROJECT_ROOT / "evaluation" / cfg["name"]
 
 
 def environment() -> dict:
@@ -163,7 +170,6 @@ def write_config(out: Path, cfg: dict, commit: str, **extra) -> None:
     """The resolved configuration: everything a rerun would need."""
     resolved = {
         **cfg,
-        "run_id": out.name,
         "git_commit": commit,
         "created_utc": f"{datetime.now(UTC):%Y-%m-%dT%H:%M:%SZ}",
         "search_spaces": {name: models.spec(name).space for name in cfg["models"]},
@@ -193,17 +199,17 @@ def write_train(
     logger.info(f"Prognosen geschrieben: {out}")
 
 
-def read_folds(cfg: dict, run: str) -> pd.DataFrame:
+def read_folds(run: str) -> pd.DataFrame:
     """The fold layout of a finished run."""
-    path = PROJECT_ROOT / cfg["output_dir"] / run / "folds.csv"
+    path = PROJECT_ROOT / "evaluation" / run / "folds.csv"
     if not path.is_file():
         raise FileNotFoundError(f"Keine Fold-Tabelle in {run}: {path}")
     return pd.read_csv(path, parse_dates=FOLD_DATES)
 
 
-def read_hyperparams(cfg: dict, names: list[str]) -> list[dict]:
+def read_hyperparams(names: list[str]) -> list[dict]:
     """Tuning records of the merged runs; without them the search cost is lost."""
-    parent = PROJECT_ROOT / cfg["output_dir"]
+    parent = PROJECT_ROOT / "evaluation"
     entries: list[dict] = []
     for name in names:
         path = parent / name / "hyperparams.json"
@@ -218,20 +224,26 @@ def read_hyperparams(cfg: dict, names: list[str]) -> list[dict]:
     return entries
 
 
-def write_evaluation(out: Path, cfg: dict, results: dict[str, pd.DataFrame]) -> None:
-    """Every table the thesis reads."""
+def write_evaluation(out: Path, results: dict[str, pd.DataFrame]) -> None:
+    """Every table the thesis reads, once for the run and once per model."""
     for name, frame in results.items():
         frame.to_csv(out / f"{name}.csv", index=False)
-    (out / "summary.md").write_text(
-        evaluation.summary_table(cfg, results["metrics_agg"], out.name),
-        encoding="utf-8",
-    )
+
+    # Cleared first: a rerun with fewer models would else keep the dropped ones.
+    shutil.rmtree(out / "models", ignore_errors=True)
+    for model in sorted(results["metrics_agg"]["model"].unique()):
+        folder = out / "models" / model
+        folder.mkdir(parents=True, exist_ok=True)
+        for name in PER_MODEL_TABLES:
+            rows = results[name]
+            rows[rows["model"] == model].to_csv(folder / f"{name}.csv", index=False)
+
     logger.info(f"Auswertung geschrieben: {out}")
 
 
-def load_runs(cfg: dict, names: list[str]) -> pd.DataFrame:
+def load_runs(names: list[str]) -> pd.DataFrame:
     """Read the prediction frames of finished training runs and merge them."""
-    parent = PROJECT_ROOT / cfg["output_dir"]
+    parent = PROJECT_ROOT / "evaluation"
     frames = []
     for name in names:
         path = parent / name / "predictions.parquet"
@@ -243,8 +255,13 @@ def load_runs(cfg: dict, names: list[str]) -> pd.DataFrame:
     return evaluation.merge_predictions(frames)
 
 
-def run_pipeline(cfg: dict, stage: str = "all", runs: list[str] | None = None) -> Path:
-    """Preprocessing -> Training -> Evaluation -> Visualization."""
+def run_pipeline(
+    cfg: dict,
+    stage: str = "all",
+    runs: list[str] | None = None,
+    force_data: bool = False,
+) -> Path:
+    """Data -> Training -> Evaluation -> Visualization."""
     validate(cfg)
     commit = git_commit()
     if commit.endswith("-dirty"):
@@ -258,40 +275,49 @@ def run_pipeline(cfg: dict, stage: str = "all", runs: list[str] | None = None) -
     if stage == "evaluate":
         if not runs:
             raise ValueError("--stage evaluate braucht --runs")
-        predictions = load_runs(cfg, runs)
+        predictions = load_runs(runs)
         # The fold layout is identical across merged runs; keep the run self-contained.
-        spans = read_folds(cfg, runs[0])
-        hyperparams = read_hyperparams(cfg, runs) or None
+        spans = read_folds(runs[0])
+        hyperparams = read_hyperparams(runs) or None
         sources = {"sources": list(runs)}
     else:
+        preprocessing.ensure_model_input(force=force_data)
         X, y, meta, tso = preprocessing.build_dataset(cfg)
         predictions, hyperparams, spans = training.run_folds(cfg, X, y, meta, tso)
 
-    # Only now, so a failed run leaves no empty directory behind.
-    out = make_run_dir(cfg)
+    out = run_dir(cfg)
+    out.mkdir(parents=True, exist_ok=True)
     write_train(out, predictions, hyperparams, spans)
     write_config(out, cfg, commit, **sources)
     if stage == "train":
-        print(f"Prognosen: {out}")
+        logger.info(f"Prognosen: {out}")
         return out
 
     results = evaluation.score(cfg, predictions)
-    write_evaluation(out, cfg, results)
+    write_evaluation(out, results)
     visualization.make_all(out, cfg, predictions, results, spans)
+    visualization.make_per_model(out, cfg, predictions, results)
 
-    print("\n" + evaluation.summary_table(cfg, results["metrics_agg"], out.name))
-    print(f"Ergebnisse: {out}")
+    logger.info(
+        "\n" + evaluation.summary_table(cfg, results["metrics_agg"], cfg["name"])
+    )
+    logger.info(f"Ergebnisse: {out}")
     return out
 
 
 def main() -> None:
     args = parse_args()
+    setup_logging()
+
     cfg = load_config(args.config)
     if args.folds is not None:
         cfg["max_folds"] = args.folds
 
-    setup_logging("run")
-    run_pipeline(cfg, args.stage, args.runs)
+    out = run_dir(cfg)
+    out.mkdir(parents=True, exist_ok=True)
+    setup_logging(out / "run.log")
+
+    run_pipeline(cfg, args.stage, args.runs, args.force_data)
 
 
 if __name__ == "__main__":
